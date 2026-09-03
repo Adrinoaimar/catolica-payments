@@ -67,7 +67,7 @@ export function paymentRepository(client = serverClient()): SupabasePaymentRepos
 
 export function paymentContext(client = serverClient()): { service: PaymentService; provider: PaymentProvider } {
   const provider = createPaymentProvider(process.env);
-  if (isProduction() && provider.name === 'mock') {
+  if (isHostedDeployment() && provider.name === 'mock') {
     throw new HttpError(503, 'Real payment provider is not configured for production');
   }
   return { provider, service: new PaymentService({ provider, repository: paymentRepository(client) }) };
@@ -203,6 +203,15 @@ export function header(headers: Record<string, string | string[] | undefined> | 
   return Array.isArray(value) ? value[0] : value;
 }
 
+export function parseIdempotencyKey(request: ApiRequest): string | undefined {
+  const value = header(request.headers, 'idempotency-key')?.trim();
+  if (value === undefined || value === '') return undefined;
+  if (value.length < 16 || value.length > 200 || /[^\x21-\x7e]/.test(value)) {
+    throw new HttpError(400, 'Idempotency-Key must contain 16 to 200 printable characters');
+  }
+  return value;
+}
+
 export type WebhookReceiptOutcome = 'ACCEPTED' | 'DUPLICATE' | 'REJECTED' | 'ERROR';
 
 /**
@@ -224,15 +233,17 @@ export async function recordWebhookReceipt(
   const providerEventId = input.providerEventId.trim().slice(0, 200);
   if (!provider || !providerEventId) return;
   const bodySha256 = createHash('sha256').update(input.rawBody, 'utf8').digest('hex');
-  const { error } = await client.from('webhook_receipts').upsert({
+  const { error } = await client.from('webhook_receipts').insert({
     provider,
     provider_event_id: providerEventId,
     body_sha256: bodySha256,
     outcome: input.outcome,
     error_code: input.errorCode?.trim().slice(0, 100) || null,
     processed_at: input.outcome === 'ACCEPTED' || input.outcome === 'DUPLICATE' ? new Date().toISOString() : null,
-  }, { onConflict: 'provider,provider_event_id' });
-  if (error) console.error('Could not persist webhook receipt', error.message);
+  });
+  // A delivery receipt is append-once evidence. A repeated event ID is a
+  // normal provider retry and must not overwrite the first body hash/outcome.
+  if (error && error.code !== '23505') console.error('Could not persist webhook receipt', error.message);
 }
 
 export function fallbackWebhookEventId(request: ApiRequest, rawBody: string): string {
@@ -242,8 +253,9 @@ export function fallbackWebhookEventId(request: ApiRequest, rawBody: string): st
   return candidate?.trim().slice(0, 200) || `body:${createHash('sha256').update(rawBody, 'utf8').digest('hex')}`;
 }
 
-function isProduction(): boolean {
-  return process.env.NODE_ENV === 'production' || process.env.VERCEL_ENV === 'production';
+function isHostedDeployment(): boolean {
+  const vercelEnvironment = process.env.VERCEL_ENV?.trim().toLowerCase();
+  return process.env.NODE_ENV === 'production' || vercelEnvironment === 'production' || vercelEnvironment === 'preview';
 }
 
 function normalizeQrCode(value: string): string {

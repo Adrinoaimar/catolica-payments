@@ -44,6 +44,16 @@ describe('payment domain', () => {
     expect(repository.events.size).toBe(1);
   });
 
+  it('returns the same checkout for a compatible create retry', async () => {
+    const { service, repository } = setup();
+    const first = await service.createDigitalPayment({ amountCents: 3000, createdBy: 'cashier-1', idempotencyKey: 'request-key-20260902' });
+    const second = await service.createDigitalPayment({ amountCents: 3000, createdBy: 'cashier-1', idempotencyKey: 'request-key-20260902' });
+    expect(second.payment.id).toBe(first.payment.id);
+    expect(second.payment.reference).toBe(first.payment.reference);
+    expect(repository.payments.size).toBe(1);
+    await expect(service.createDigitalPayment({ amountCents: 3500, createdBy: 'cashier-1', idempotencyKey: 'request-key-20260902' })).rejects.toMatchObject({ statusCode: 409 });
+  });
+
   it('processes same provider payment ID only once even with a second event ID', async () => {
     const { service, provider, repository } = setup();
     const created = await service.createDigitalPayment({ amountCents: 3000 });

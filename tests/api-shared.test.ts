@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseBody, parseRequestAmount, publicPayment, fallbackWebhookEventId, recordWebhookReceipt } from '../api/_shared';
+import { parseBody, parseRequestAmount, parseIdempotencyKey, publicPayment, fallbackWebhookEventId, recordWebhookReceipt } from '../api/_shared';
 
 describe('server API input and response boundaries', () => {
   it('accepts integer cents or decimal soles, rejects ambiguous amounts', () => {
@@ -8,6 +8,12 @@ describe('server API input and response boundaries', () => {
     expect(parseRequestAmount({ amount: '30.50' })).toBe(3_050);
     expect(() => parseRequestAmount({ amount_cents: '30.5' })).toThrow('positive integer');
     expect(() => parseRequestAmount({ amount: '' })).toThrow('up to two decimals');
+  });
+
+  it('validates the optional create idempotency key', () => {
+    expect(parseIdempotencyKey({ headers: { 'Idempotency-Key': 'request-key-20260902' } })).toBe('request-key-20260902');
+    expect(parseIdempotencyKey({ headers: {} })).toBeUndefined();
+    expect(() => parseIdempotencyKey({ headers: { 'Idempotency-Key': 'short' } })).toThrow('16 to 200');
   });
 
   it('returns a 400-domain error for malformed JSON', () => {
@@ -37,7 +43,7 @@ describe('server API input and response boundaries', () => {
     const client = {
       from() {
         return {
-          upsert: async (row: Record<string, unknown>, options: unknown) => { calls.push({ row, options }); return { error: null }; },
+      insert: async (row: Record<string, unknown>) => { calls.push({ row, options: undefined }); return { error: null }; },
         };
       },
     } as never;
@@ -45,6 +51,6 @@ describe('server API input and response boundaries', () => {
     expect(calls[0].row).toMatchObject({ provider: 'taypi', provider_event_id: 'delivery-1', outcome: 'ACCEPTED' });
     expect(calls[0].row.body_sha256).toMatch(/^[a-f0-9]{64}$/);
     expect(calls[0].row).not.toHaveProperty('raw_payload');
-    expect(calls[0].options).toEqual({ onConflict: 'provider,provider_event_id' });
+    expect(calls[0].options).toBeUndefined();
   });
 });

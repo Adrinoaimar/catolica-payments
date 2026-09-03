@@ -36,7 +36,7 @@ grant all on public.job_locks to service_role;
 
 create or replace function public.acquire_job_lock(
   p_job_name text,
-  p_lease_seconds integer default 240
+  p_lease_seconds integer default 600
 )
 returns uuid
 language plpgsql

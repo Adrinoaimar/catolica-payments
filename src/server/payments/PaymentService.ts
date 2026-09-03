@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { ProviderError, type PaymentProvider } from '../providers/PaymentProvider';
+import type { ProviderPayment } from './types';
 import type { PaymentRepository } from '../repositories/PaymentRepository';
 import type { Payment, PaymentEvent, VerifiedWebhook } from './types';
-import { generateReference } from './reference';
+import { generateIdempotentReference, generateReference } from './reference';
 
 export interface PaymentServiceOptions {
   repository: PaymentRepository;
@@ -49,17 +50,24 @@ export class PaymentService {
     this.reconcileConcurrency = Math.min(8, Math.max(1, options.reconcileConcurrency ?? 4));
   }
 
-  async createDigitalPayment(input: { amountCents: number; createdBy?: string | null }): Promise<CreatedPayment> {
+  async createDigitalPayment(input: { amountCents: number; createdBy?: string | null; idempotencyKey?: string | null }): Promise<CreatedPayment> {
     this.validateAmount(input.amountCents);
     const provider = this.digitalProvider();
     const createdAt = this.now();
     const expiresAt = new Date(createdAt.getTime() + this.expiryMinutes * 60_000);
-    const reference = this.makeReference();
+    const idempotencyKey = normalizeIdempotencyKey(input.idempotencyKey);
+    const existing = idempotencyKey ? await this.options.repository.findByIdempotencyKey(idempotencyKey) : null;
+    if (existing) {
+      assertRetryCompatible(existing, { amountCents: input.amountCents, createdBy: input.createdBy ?? null, provider: provider.name });
+      return { payment: existing, providerPayment: this.providerPaymentFromPayment(existing) };
+    }
+    const reference = idempotencyKey ? generateIdempotentReference(createdAt, idempotencyKey) : this.makeReference();
     const providerPayment = await provider.createPayment({
       amountCents: input.amountCents, currency: 'PEN', reference,
       createdBy: input.createdBy ?? null, expiresAt: expiresAt.toISOString(),
     });
     let payment: Payment;
+    let cancelOrphan = true;
     try {
       validateCreatedProviderPayment(providerPayment, {
         provider: provider.name,
@@ -72,36 +80,87 @@ export class PaymentService {
         provider: provider.name, providerPaymentId: providerPayment.providerPaymentId,
         status: 'PENDING', createdBy: input.createdBy ?? null, createdAt: createdAt.toISOString(),
         expiresAt: providerPayment.expiresAt ?? expiresAt.toISOString(), paidAt: null, cancelledAt: null,
-        providerData: providerPayment.providerData ?? {},
+        providerData: providerPayment.providerData ?? {}, idempotencyKey,
       };
-      await this.options.repository.insert(payment);
+      try {
+        await this.options.repository.insert(payment);
+      } catch (insertError) {
+        // Two retries can reach the provider concurrently. If the first one
+        // won the ledger insert, return its row rather than cancelling the
+        // shared provider checkout.
+        if (idempotencyKey) {
+          const committed = await this.options.repository.findByIdempotencyKey(idempotencyKey);
+          if (committed) {
+            assertRetryCompatible(committed, { amountCents: input.amountCents, createdBy: input.createdBy ?? null, provider: provider.name });
+            return { payment: committed, providerPayment: this.providerPaymentFromPayment(committed) };
+          }
+          // The first concurrent request may still be committing. TAYPI's
+          // provider idempotency key makes the checkout recoverable on retry;
+          // cancelling here could cancel the sibling request's checkout.
+          cancelOrphan = false;
+        }
+        throw insertError;
+      }
     } catch (error) {
       // External checkout already exists. Best-effort cancellation prevents an
       // orphaned QR when the ledger insert fails (for example, a duplicate
       // reference or a transient database error).
-      try { await provider.cancelPayment(providerPayment.providerPaymentId); } catch (cancelError) {
-        console.error('Could not cancel orphaned provider payment', cancelError);
+      if (cancelOrphan) {
+        try { await provider.cancelPayment(providerPayment.providerPaymentId); } catch (cancelError) {
+          console.error('Could not cancel orphaned provider payment', cancelError);
+        }
       }
       throw error;
     }
     return { payment, providerPayment };
   }
 
-  async createCashPayment(input: { amountCents: number; createdBy?: string | null }): Promise<Payment> {
+  async createCashPayment(input: { amountCents: number; createdBy?: string | null; idempotencyKey?: string | null }): Promise<Payment> {
     this.validateAmount(input.amountCents);
+    const idempotencyKey = normalizeIdempotencyKey(input.idempotencyKey);
+    const existing = idempotencyKey ? await this.options.repository.findByIdempotencyKey(idempotencyKey) : null;
+    if (existing) {
+      assertRetryCompatible(existing, { amountCents: input.amountCents, createdBy: input.createdBy ?? null, provider: 'CASH' });
+      return existing;
+    }
     const now = this.now().toISOString();
     const payment: Payment = {
       id: randomUUID(), reference: this.makeReference(), amountCents: input.amountCents,
       currency: 'PEN', provider: 'CASH', providerPaymentId: null, status: 'PAID',
       createdBy: input.createdBy ?? null, createdAt: now, expiresAt: null, paidAt: now,
-      cancelledAt: null, providerData: { method: 'cash' },
+      cancelledAt: null, providerData: { method: 'cash' }, idempotencyKey,
     };
     const event: PaymentEvent = {
       id: randomUUID(), paymentId: payment.id, eventType: 'cash.recorded', previousStatus: 'PENDING',
       newStatus: 'PAID', provider: 'CASH', providerEventId: `cash:${payment.id}`, rawPayload: {}, createdAt: now,
     };
-    await this.options.repository.insertCashPayment(payment, event);
+    try {
+      await this.options.repository.insertCashPayment(payment, event);
+    } catch (insertError) {
+      if (idempotencyKey) {
+        const committed = await this.options.repository.findByIdempotencyKey(idempotencyKey);
+        if (committed) {
+          assertRetryCompatible(committed, { amountCents: input.amountCents, createdBy: input.createdBy ?? null, provider: 'CASH' });
+          return committed;
+        }
+      }
+      throw insertError;
+    }
     return payment;
+  }
+
+  private providerPaymentFromPayment(payment: Payment): ProviderPayment {
+    const data = payment.providerData ?? {};
+    const stringValue = (...values: unknown[]) => values.find((value): value is string => typeof value === 'string' && value.length > 0);
+    return {
+      providerPaymentId: payment.providerPaymentId ?? '', status: payment.status,
+      amountCents: payment.amountCents, currency: payment.currency, reference: payment.reference,
+      expiresAt: payment.expiresAt ?? undefined,
+      qrCode: stringValue(data.qrCode, data.qr_code, data.qr_image),
+      checkoutUrl: stringValue(data.checkoutUrl, data.checkout_url),
+      checkoutToken: stringValue(data.checkoutToken, data.checkout_token),
+      providerData: data,
+    };
   }
 
   async processWebhook(webhook: VerifiedWebhook): Promise<{ payment: Payment; changed: boolean }> {
@@ -348,4 +407,22 @@ function normalizeReconciliationEventId(eventId: string | undefined, provider: s
 
 function isTerminalStatus(status: Payment['status'] | undefined): status is Exclude<Payment['status'], 'PENDING'> {
   return status === 'PAID' || status === 'FAILED' || status === 'EXPIRED' || status === 'CANCELLED';
+}
+
+function normalizeIdempotencyKey(value: string | null | undefined): string | null {
+  if (value === undefined || value === null || value.trim() === '') return null;
+  const normalized = value.trim();
+  if (normalized.length < 16 || normalized.length > 200 || /[^\x21-\x7e]/.test(normalized)) {
+    throw new PaymentOperationError(409, 'Idempotency-Key must contain 16 to 200 printable characters');
+  }
+  return normalized;
+}
+
+function assertRetryCompatible(
+  payment: Payment,
+  expected: { amountCents: number; createdBy: string | null; provider: string },
+): void {
+  if (payment.amountCents !== expected.amountCents || payment.createdBy !== expected.createdBy || payment.provider !== expected.provider) {
+    throw new PaymentOperationError(409, 'Idempotency-Key was already used with different payment data');
+  }
 }

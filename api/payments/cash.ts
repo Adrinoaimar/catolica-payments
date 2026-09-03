@@ -2,6 +2,7 @@ import {
   cashPaymentContext,
   parseBody,
   parseRequestAmount,
+  parseIdempotencyKey,
   publicPayment,
   requireUser,
   sendError,
@@ -19,7 +20,7 @@ export default async function handler(request: ApiRequest, response: ApiResponse
     const user = await requireUser(request, client);
     const body = parseBody(request.body);
     const amountCents = parseRequestAmount(body);
-    const payment = await cashPaymentContext(client).createCashPayment({ amountCents, createdBy: user.id });
+    const payment = await cashPaymentContext(client).createCashPayment({ amountCents, createdBy: user.id, idempotencyKey: parseIdempotencyKey(request) });
     response.status(201).json({ payment: publicPayment(payment) });
   } catch (error) { sendError(response, error); }
 }

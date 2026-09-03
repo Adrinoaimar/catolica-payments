@@ -70,7 +70,7 @@ export default async function handler(request: ApiRequest & Partial<AsyncIterabl
 function paymentContextForWebhook(name: string) {
   if (!name) throw new HttpError(404, 'Webhook provider is required');
   if (name === 'mock') {
-    if (isProduction()) throw new HttpError(404, 'Not found');
+    if (isHostedDeployment()) throw new HttpError(404, 'Not found');
     const client = serverClient();
     const provider = new MockPaymentProvider({ allowUnknownWebhook: true });
     const service = new PaymentService({ provider, repository: new SupabasePaymentRepository(client) });
@@ -88,8 +88,9 @@ function singleQuery(value: string | string[] | undefined): string | undefined {
   return result?.trim() || undefined;
 }
 
-function isProduction(): boolean {
-  return process.env.NODE_ENV === 'production' || process.env.VERCEL_ENV === 'production';
+function isHostedDeployment(): boolean {
+  const vercelEnvironment = process.env.VERCEL_ENV?.trim().toLowerCase();
+  return process.env.NODE_ENV === 'production' || vercelEnvironment === 'production' || vercelEnvironment === 'preview';
 }
 
 function isReceiptRejection(error: unknown): boolean {

@@ -17,6 +17,7 @@ export interface PaymentRepository {
   findById(id: string): Promise<Payment | null>;
   findByReference(reference: string): Promise<Payment | null>;
   findByProviderPaymentId(providerPaymentId: string): Promise<Payment | null>;
+  findByIdempotencyKey(idempotencyKey: string): Promise<Payment | null>;
   list(filters?: PaymentListFilters): Promise<Payment[]>;
   findEventByProviderEventId(providerEventId: string): Promise<PaymentEvent | null>;
   listPendingExpired(now: string): Promise<Payment[]>;

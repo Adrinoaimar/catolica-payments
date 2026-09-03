@@ -33,7 +33,7 @@ copy .env.example .env.local
 
 En macOS/Linux, use `cp .env.example .env.local`. Complete `VITE_SUPABASE_URL` y `VITE_SUPABASE_ANON_KEY` para el navegador, además de `SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY` para las funciones serverless; no confirme secretos en Git.
 
-La sesión del navegador usa Supabase Auth (Email/Password), persiste mediante el cliente oficial y envía `Authorization: Bearer <access_token>` a cada endpoint protegido. Cada usuario debe tener una fila en `public.user_roles` con rol `ADMIN` o `CASHIER`; el frontend no acepta el rol desde metadata para autorizar operaciones.
+La sesión del navegador usa Supabase Auth (Email/Password), persiste mediante el cliente oficial y envía `Authorization: Bearer <access_token>` a cada endpoint protegido. Cada usuario debe tener una fila en `public.user_roles` con rol `ADMIN` o `CASHIER`; el frontend no acepta el rol desde metadata para autorizar operaciones. Las rutas mock se bloquean tanto en Production como en Preview de Vercel, aunque alguien configure `PAYMENT_PROVIDER=mock` por error.
 
 Ejecute las migraciones de `supabase/migrations/` en el proyecto Supabase. Después inicie el entorno:
 
@@ -84,6 +84,8 @@ POST /api/webhooks/culqi (reservado; adaptador específico pendiente)
 Cada adaptador debe autenticar el evento, buscar la referencia, comparar monto y moneda, validar `provider_payment_id`, rechazar duplicados de forma idempotente y registrar `payment_events` dentro de una operación atómica. Responda rápido con HTTP 200 solo después de aceptar el evento; eventos inválidos deben rechazarse con el código apropiado sin modificar pagos. `webhook_receipts` conserva el identificador de entrega, hash del body, resultado y código de error para observabilidad sin duplicar payloads sensibles.
 
 Un administrador puede cancelar una operación digital `PENDING` desde la pantalla de cobro. La API `POST /api/payments/:reference/cancel` exige sesión Bearer con rol `ADMIN`, consulta el estado del proveedor antes de cancelar y registra la transición y su motivo en `payment_events` dentro de una operación atómica. Nunca puede convertir una operación terminal en `CANCELLED`.
+
+Las creaciones aceptan `Idempotency-Key` (16–200 caracteres imprimibles). La clave queda registrada con el pago y una repetición compatible devuelve el mismo checkout o recibo de efectivo; reutilizarla con otro monto, usuario o método devuelve `409`.
 
 ### Alternativa cuando el webhook se retrasa
 

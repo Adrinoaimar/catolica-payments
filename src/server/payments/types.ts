@@ -23,6 +23,8 @@ export interface Payment {
   paidAt: string | null;
   cancelledAt: string | null;
   providerData: Record<string, unknown>;
+  /** Client-supplied key used to make a create request retry-safe. */
+  idempotencyKey?: string | null;
 }
 
 export interface PaymentEvent {

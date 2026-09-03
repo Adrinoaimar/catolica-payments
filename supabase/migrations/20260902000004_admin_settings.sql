@@ -47,6 +47,9 @@ begin
   if p_user_id is null or p_actor_id is null or role_value not in ('ADMIN', 'CASHIER') then
     raise exception 'invalid user role assignment' using errcode = '22023';
   end if;
+  -- Serialize role changes so two simultaneous demotions cannot remove the
+  -- institution's final administrator.
+  perform pg_advisory_xact_lock(hashtextextended('catolica:user-role-admin', 0));
   if not exists (select 1 from auth.users where id = p_user_id) then
     raise exception 'user not found' using errcode = 'P0002';
   end if;

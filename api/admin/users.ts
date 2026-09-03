@@ -50,9 +50,14 @@ export default async function handler(request: ApiRequest, response: ApiResponse
 }
 
 export async function listManagedUsers(client: ReturnType<typeof serverClient>): Promise<ManagedUser[]> {
-  const { data: authData, error: authError } = await client.auth.admin.listUsers({ page: 1, perPage: 1000 });
-  if (authError) throw authError;
-  const users = authData.users ?? [];
+  const users: User[] = [];
+  for (let page = 1; page <= 100; page += 1) {
+    const { data: authData, error: authError } = await client.auth.admin.listUsers({ page, perPage: 1000 });
+    if (authError) throw authError;
+    const batch = authData.users ?? [];
+    users.push(...batch);
+    if (batch.length < 1000) break;
+  }
   const { data: roleRows, error: roleError } = await client.from('user_roles').select('user_id, role');
   if (roleError) throw roleError;
   const roles = new Map((roleRows ?? []).map((row: { user_id: string; role: string }) => [row.user_id, row.role]));

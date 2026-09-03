@@ -17,6 +17,7 @@ export class SupabasePaymentRepository implements PaymentRepository {
   async findById(id: string): Promise<Payment | null> { return this.findOne('id', id); }
   async findByReference(reference: string): Promise<Payment | null> { return this.findOne('reference', reference); }
   async findByProviderPaymentId(providerPaymentId: string): Promise<Payment | null> { return this.findOne('provider_payment_id', providerPaymentId); }
+  async findByIdempotencyKey(idempotencyKey: string): Promise<Payment | null> { return this.findOne('idempotency_key', idempotencyKey); }
 
   async list(filters: PaymentListFilters = {}): Promise<Payment[]> {
     let query = this.client.from('payments').select('*').order('created_at', { ascending: false });
@@ -110,6 +111,7 @@ export class SupabasePaymentRepository implements PaymentRepository {
       p_event_id: event.id,
       p_event_provider_id: event.providerEventId,
       p_event_created_at: event.createdAt,
+      p_idempotency_key: payment.idempotencyKey ?? null,
     });
     if (error) throw error;
     const result = data as { payment?: Row } | null;
@@ -127,6 +129,7 @@ export class SupabasePaymentRepository implements PaymentRepository {
     return {
       id: payment.id, reference: payment.reference, amount_cents: payment.amountCents, currency: payment.currency,
       provider: payment.provider, provider_payment_id: payment.providerPaymentId, status: payment.status,
+      idempotency_key: payment.idempotencyKey ?? null,
       created_by: payment.createdBy, created_at: payment.createdAt, expires_at: payment.expiresAt,
       paid_at: payment.paidAt, cancelled_at: payment.cancelledAt, provider_data: payment.providerData,
     };
@@ -136,6 +139,7 @@ export class SupabasePaymentRepository implements PaymentRepository {
     return {
       id: row.id, reference: row.reference, amountCents: row.amount_cents, currency: row.currency,
       provider: row.provider, providerPaymentId: row.provider_payment_id ?? null, status: row.status as PaymentStatus,
+      idempotencyKey: row.idempotency_key ?? null,
       createdBy: row.created_by ?? null, createdAt: row.created_at, expiresAt: row.expires_at ?? null,
       paidAt: row.paid_at ?? null, cancelledAt: row.cancelled_at ?? null, providerData: row.provider_data ?? {},
     };

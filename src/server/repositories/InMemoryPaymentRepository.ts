@@ -16,6 +16,9 @@ export class InMemoryPaymentRepository implements PaymentRepository {
     if (payment.providerPaymentId && [...this.payments.values()].some((item) => item.providerPaymentId === payment.providerPaymentId)) {
       throw new Error('Provider payment ID already exists');
     }
+    if (payment.idempotencyKey && [...this.payments.values()].some((item) => item.idempotencyKey === payment.idempotencyKey)) {
+      throw new Error('Payment idempotency key already exists');
+    }
     this.payments.set(payment.id, structuredClone(payment));
     return structuredClone(payment);
   }
@@ -32,6 +35,11 @@ export class InMemoryPaymentRepository implements PaymentRepository {
 
   async findByProviderPaymentId(providerPaymentId: string): Promise<Payment | null> {
     const payment = [...this.payments.values()].find((item) => item.providerPaymentId === providerPaymentId);
+    return payment ? structuredClone(payment) : null;
+  }
+
+  async findByIdempotencyKey(idempotencyKey: string): Promise<Payment | null> {
+    const payment = [...this.payments.values()].find((item) => item.idempotencyKey === idempotencyKey);
     return payment ? structuredClone(payment) : null;
   }
 

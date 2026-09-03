@@ -10,7 +10,7 @@ Antes de desplegar, ejecute `npm run verify:production` con las variables cargad
 
 ## Migraciones y Realtime
 
-Ejecute en orden todas las migraciones de `supabase/migrations/`, incluidas `20260902000002_realtime_payment_updates.sql`, `20260902000003_admin_cancellation.sql`, `20260902000004_admin_settings.sql` y `20260902000005_webhook_receipts_and_job_lock.sql`. Después cree al menos un usuario Auth y su fila `user_roles` con `ADMIN` o `CASHIER`. Verifique que el canal `payment_updates` se suscribe con sesión autenticada y que `provider_data` nunca aparece en el payload público.
+Ejecute en orden todas las migraciones de `supabase/migrations/`, incluidas `20260902000002_realtime_payment_updates.sql`, `20260902000003_admin_cancellation.sql`, `20260902000004_admin_settings.sql`, `20260902000005_webhook_receipts_and_job_lock.sql`, `20260902000006_create_idempotency.sql` y `20260902000007_lock_admin_role_changes.sql`. Después cree al menos un usuario Auth y su fila `user_roles` con `ADMIN` o `CASHIER`. Verifique que el canal `payment_updates` se suscribe con sesión autenticada y que `provider_data` nunca aparece en el payload público.
 
 ## Smoke test antes de dinero real
 

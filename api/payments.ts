@@ -6,6 +6,7 @@ import {
   paymentRepository,
   publicPayment,
   publicProviderPayment,
+  parseIdempotencyKey,
   requireUser,
   sendError,
   serverClient,
@@ -35,16 +36,17 @@ export default async function handler(request: ApiRequest, response: ApiResponse
 
     const body = parseBody(request.body);
     const amountCents = parseRequestAmount(body);
+    const idempotencyKey = parseIdempotencyKey(request);
     const method = body.method === undefined ? 'DIGITAL' : String(body.method).toUpperCase();
     if (method !== 'DIGITAL' && method !== 'CASH') throw new HttpError(400, 'method must be DIGITAL or CASH');
     if (method === 'CASH') {
-      const payment = await cashPaymentContext(client).createCashPayment({ amountCents, createdBy: user.id });
+      const payment = await cashPaymentContext(client).createCashPayment({ amountCents, createdBy: user.id, idempotencyKey });
       response.status(201).json({ payment: publicPayment(payment) });
       return;
     }
 
     const { service } = paymentContext(client);
-    const result = await service.createDigitalPayment({ amountCents, createdBy: user.id });
+    const result = await service.createDigitalPayment({ amountCents, createdBy: user.id, idempotencyKey });
     response.status(201).json({ payment: publicPayment(result.payment), providerPayment: publicProviderPayment(result.providerPayment) });
   } catch (error) { sendError(response, error); }
 }

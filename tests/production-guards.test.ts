@@ -36,4 +36,16 @@ describe('production demo guards', () => {
     expect(result.body).toEqual({ ok: false, error: 'Not found' });
     vi.unstubAllEnvs();
   });
+
+  it('blocks the simulator on hosted preview deployments too', async () => {
+    vi.stubEnv('NODE_ENV', 'development');
+    vi.stubEnv('VERCEL_ENV', 'preview');
+    const { result, response } = responseCapture();
+
+    await devMockHandler({ method: 'POST', headers: {}, query: { reference: 'CAT-20260902-ABC234' } }, response);
+
+    expect(result.status).toBe(404);
+    expect(result.body).toEqual({ error: 'Not found' });
+    vi.unstubAllEnvs();
+  });
 });

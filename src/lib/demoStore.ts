@@ -91,8 +91,9 @@ export async function createPaymentRequest(amountCents: number, method: PaymentM
     expiresAt: method === 'DIGITAL' ? new Date(Date.now() + 15 * 60_000).toISOString() : undefined,
   }
   // Backend remains source of truth. Local fallback exists only in explicit demo mode.
+  const idempotencyKey = crypto.randomUUID?.() ?? `catolica-${Date.now()}-${Math.random().toString(36).slice(2)}`
   try {
-    const response = await apiFetch(method === 'CASH' ? '/api/payments/cash' : '/api/payments', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ amountCents, method }) })
+    const response = await apiFetch(method === 'CASH' ? '/api/payments/cash' : '/api/payments', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey }, body: JSON.stringify({ amountCents, method }) })
     if (response.ok) {
       const remote = await response.json() as Partial<Payment> & { payment?: Partial<Payment> }
       const remotePayment = remote.payment ?? remote

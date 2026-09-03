@@ -41,6 +41,7 @@ Construir una caja web para Grupo La Católica que genere cobros digitales por o
 - [x] Activar mediante `PAYMENT_PROVIDER=taypi`, sin cambios en UI ni servicio de dominio.
 - [x] Añadir reconciliación server-side por polling como respaldo del webhook.
 - [x] Registrar recibos de entrega sin payload duplicado y bloquear cron solapado con lease de Postgres.
+- [x] Hacer las creaciones retry-safe con `Idempotency-Key` y serializar la democión del último administrador.
 
 ### Fase 3 — Operación y reportes
 

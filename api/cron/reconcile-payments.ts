@@ -22,7 +22,10 @@ export default async function handler(request: ApiRequest, response: ApiResponse
     const client = serverClient();
     const { data: lockToken, error: lockError } = await client.rpc('acquire_job_lock', {
       p_job_name: 'payments-reconcile',
-      p_lease_seconds: 240,
+      // A full bounded pass can contain seven batches of provider retries.
+      // Keep the lease longer than that worst-case window so a second
+      // scheduler cannot enter while the first invocation is still active.
+      p_lease_seconds: 600,
     });
     if (lockError) throw new HttpError(503, 'Reconciliation lock is not configured');
     if (!lockToken) {
