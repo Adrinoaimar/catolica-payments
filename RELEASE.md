@@ -6,7 +6,7 @@ Esta guía separa el software verificable de las credenciales y cuentas que solo
 
 En Vercel Production configure `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `PAYMENT_PROVIDER=taypi`, `TAYPI_PUBLIC_KEY`, `TAYPI_SECRET_KEY`, `TAYPI_WEBHOOK_SECRET` y `CRON_SECRET`. Mantenga las claves privadas sin prefijo `VITE_`. Use `TAYPI_SANDBOX=true` y claves de prueba únicamente en un entorno de staging; el verificador las rechaza en producción.
 
-Antes de desplegar, ejecute `npm run verify:production` con las variables cargadas. El comando solo valida presencia, forma, HTTPS y separación de secretos; nunca imprime sus valores.
+Antes de desplegar, ejecute `npm run verify:production` con las variables cargadas. El comando solo valida presencia, forma, HTTPS y separación de secretos; nunca imprime sus valores. CI también ejecuta esta verificación con valores sintéticos para detectar regresiones, pero no sustituye validarla contra las variables reales del proyecto.
 
 ## Migraciones y Realtime
 

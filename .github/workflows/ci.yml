@@ -31,3 +31,19 @@ jobs:
 
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
+
+      - name: Verify production environment shape
+        env:
+          VITE_SUPABASE_URL: https://ci-placeholder.supabase.co
+          VITE_SUPABASE_ANON_KEY: ci-anon-placeholder
+          SUPABASE_URL: https://ci-placeholder.supabase.co
+          SUPABASE_SERVICE_ROLE_KEY: ci-service-role-placeholder
+          CRON_SECRET: ci-cron-secret-placeholder-32-characters-long
+          PAYMENT_PROVIDER: taypi
+          TAYPI_PUBLIC_KEY: taypi_pk_live_ci_placeholder
+          TAYPI_SECRET_KEY: taypi_sk_live_ci_placeholder
+          TAYPI_WEBHOOK_SECRET: ci-taypi-webhook-placeholder
+          TAYPI_API_URL: https://app.taypi.pe
+          TAYPI_SANDBOX: 'false'
+          VITE_DEMO_MODE: 'false'
+        run: npm run verify:production

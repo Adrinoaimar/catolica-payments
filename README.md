@@ -48,7 +48,7 @@ npm run test
 npm run build
 ```
 
-Cada push o pull request ejecuta automáticamente tests, build y auditoría de dependencias mediante GitHub Actions (`.github/workflows/ci.yml`).
+Cada push o pull request ejecuta automáticamente tests, build, auditoría de dependencias y una verificación sintética de la forma del entorno productivo mediante GitHub Actions (`.github/workflows/ci.yml`). La verificación no contiene ni imprime secretos reales.
 
 ## Variables de entorno
 
