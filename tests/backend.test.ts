@@ -64,6 +64,12 @@ describe('payment domain', () => {
     await expect(service.processWebhook({ ...webhook, providerPaymentId: 'mock_missing' })).rejects.toThrow('not found');
   });
 
+  it('rejects malformed webhook before touching the ledger', async () => {
+    const { provider, repository } = setup();
+    await expect(provider.verifyWebhook({ rawBody: '{"status":"PAID"}', headers: {} })).rejects.toThrow('Invalid mock webhook');
+    expect(repository.payments.size).toBe(0);
+  });
+
   it('does not pay an already expired payment', async () => {
     const { service, provider, repository } = setup();
     const created = await service.createDigitalPayment({ amountCents: 1000 });
