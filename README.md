@@ -97,6 +97,8 @@ TAYPI también reintenta webhooks y permite reenvío manual desde su panel. La r
 
 Alternativas evaluadas: reenvío/reintentos nativos de TAYPI, polling server-side centralizado (implementado mediante cron y acción excepcional), Supabase Cron/`pg_cron` llamando esta ruta, y Supabase Queues para una futura cola durable. El cliente TAYPI reintenta solo fallos transitorios HTTP (429/5xx/timeouts), con backoff acotado e idempotency keys. Cada pasada del reconciliador inspecciona como máximo 25 pendientes y consulta hasta cuatro en paralelo; un lease en Postgres evita ejecuciones solapadas. Supabase Realtime es el canal principal para refrescar la interfaz; la app solo usa lectura del ledger como respaldo cuando el canal no está saludable. `onSuccess` de un checkout o cualquier señal del navegador no confirma dinero. Referencias: [Supabase Cron](https://supabase.com/docs/guides/cron), [Supabase Queues](https://supabase.com/docs/guides/queues).
 
+Para usar Supabase Cron como alternativa a Vercel Cron, habilite `pg_cron` y `pg_net`, guarde la URL HTTPS del endpoint y `CRON_SECRET` en Supabase Vault, y ejecute la plantilla [supabase/cron/reconcile-payments.sql.example](supabase/cron/reconcile-payments.sql.example) con el rol `postgres`. La plantilla no contiene secretos, usa `Authorization: Bearer` y permite revisar ejecuciones en `cron.job_run_details` y respuestas en `net._http_response`. Mantenga un solo job activo para evitar llamadas duplicadas; el lock transaccional del endpoint también protege contra solapamientos.
+
 ## Activar Taypi
 
 La integración operativa actual es `TaypiProvider` y usa la API REST oficial de TAYPI. Configure las claves en el entorno serverless (nunca en `VITE_*`) y cambie:

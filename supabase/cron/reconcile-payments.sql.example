@@ -1,0 +1,54 @@
+-- Fallback de reconciliación para proyectos que no pueden ejecutar Vercel Cron
+-- cada cinco minutos (por ejemplo, Vercel Hobby).
+--
+-- Requisitos en el Dashboard de Supabase:
+--   1. Habilitar las extensiones pg_cron y pg_net.
+--   2. Guardar en Vault, con estos nombres exactos, solo los valores reales:
+--        catolica_reconcile_url    = https://DOMINIO_PRODUCCION/api/cron/reconcile-payments
+--        catolica_reconcile_secret = el mismo CRON_SECRET de Vercel/backend
+--   3. Ejecutar este archivo con el rol postgres.
+--
+-- No pongas secretos en este repositorio ni reemplaces los valores en este
+-- archivo. Crea los secretos desde la UI de Vault o con vault.create_secret
+-- directamente en el SQL Editor del proyecto.
+
+-- Ejemplo (ejecutar por separado y solo con valores reales):
+-- select vault.create_secret(
+--   'https://DOMINIO_PRODUCCION/api/cron/reconcile-payments',
+--   'catolica_reconcile_url',
+--   'URL pública HTTPS del endpoint protegido'
+-- );
+-- select vault.create_secret(
+--   'REEMPLAZAR_CON_CRON_SECRET',
+--   'catolica_reconcile_secret',
+--   'Secreto compartido con el endpoint de reconciliación'
+-- );
+
+-- Si ya existe un job con este nombre, elimínalo desde el Dashboard o con
+-- cron.unschedule antes de crear uno nuevo para evitar ejecuciones duplicadas.
+select cron.schedule(
+  'catolica-payments-reconcile',
+  '*/5 * * * *',
+  $$
+    select net.http_get(
+      url := (
+        select decrypted_secret
+        from vault.decrypted_secrets
+        where name = 'catolica_reconcile_url'
+      ),
+      headers := jsonb_build_object(
+        'Accept', 'application/json',
+        'Authorization', 'Bearer ' || (
+          select decrypted_secret
+          from vault.decrypted_secrets
+          where name = 'catolica_reconcile_secret'
+        )
+      ),
+      timeout_milliseconds := 10000
+    ) as request_id;
+  $$
+);
+
+-- Verifica ejecuciones y respuestas asíncronas:
+-- select jobid, jobname, schedule, active from cron.job;
+-- select * from net._http_response order by created desc limit 20;
