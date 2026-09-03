@@ -10,7 +10,7 @@ Antes de desplegar, ejecute `npm run verify:production` con las variables cargad
 
 ## Migraciones y Realtime
 
-Ejecute en orden todas las migraciones de `supabase/migrations/`, incluidas `20260902000002_realtime_payment_updates.sql` y `20260902000003_admin_cancellation.sql`. Después cree al menos un usuario Auth y su fila `user_roles` con `ADMIN` o `CASHIER`. Verifique que el canal `payment_updates` se suscribe con sesión autenticada y que `provider_data` nunca aparece en el payload público.
+Ejecute en orden todas las migraciones de `supabase/migrations/`, incluidas `20260902000002_realtime_payment_updates.sql`, `20260902000003_admin_cancellation.sql`, `20260902000004_admin_settings.sql` y `20260902000005_webhook_receipts_and_job_lock.sql`. Después cree al menos un usuario Auth y su fila `user_roles` con `ADMIN` o `CASHIER`. Verifique que el canal `payment_updates` se suscribe con sesión autenticada y que `provider_data` nunca aparece en el payload público.
 
 ## Smoke test antes de dinero real
 
@@ -29,3 +29,9 @@ Si el smoke test falla, cambie `PAYMENT_PROVIDER` a `mock` solo en Preview o des
 ## Scheduler
 
 El cron de `vercel.json` usa cada cinco minutos. Si el plan Vercel limita esa frecuencia, invoque `/api/cron/reconcile-payments` desde Supabase Cron/`pg_cron` o un scheduler externo con el mismo secreto. El endpoint devuelve `503` si alguna operación no pudo reconciliarse, para que el scheduler/monitorización lo detecte. El webhook firmado sigue siendo la autoridad y el cron solo reconcilia estados consultados server-side; cada pasada está limitada a 25 pendientes y cuatro solicitudes simultáneas.
+
+La migración `20260902000005_webhook_receipts_and_job_lock.sql` registra únicamente proveedor, identificador de entrega, hash SHA-256, resultado y código de error; no duplica el payload crudo. También crea un lease de Postgres para evitar cron solapado. Si el lock no está aplicado, el endpoint devuelve `503` y no consulta al proveedor.
+
+## PWA
+
+La build productiva debe publicar `manifest.webmanifest`, `/icons/icon.svg` y `/sw.js` en la raíz del dominio. Compruebe en DevTools que el worker esté activo y que una navegación sin conexión solo recupere la interfaz, nunca respuestas de `/api/`, webhooks o datos de Supabase. El worker no sustituye la autenticación ni habilita cobros offline: antes de aprobar una operación, el cajero debe tener conectividad con el API y el ledger. Al cambiar la estrategia o los assets no versionados, incremente las versiones de caché en `public/sw.js` y repita el smoke test.

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import {
   PaymentService,
@@ -200,6 +201,45 @@ export function header(headers: Record<string, string | string[] | undefined> | 
   const key = Object.keys(headers).find((candidate) => candidate.toLowerCase() === name.toLowerCase());
   const value = key ? headers[key] : undefined;
   return Array.isArray(value) ? value[0] : value;
+}
+
+export type WebhookReceiptOutcome = 'ACCEPTED' | 'DUPLICATE' | 'REJECTED' | 'ERROR';
+
+/**
+ * Persist delivery metadata without storing another copy of a provider body.
+ * Receipt failures never block the financial transition or the provider retry
+ * path; payment_events remains the authoritative audit trail.
+ */
+export async function recordWebhookReceipt(
+  client: SupabaseClient,
+  input: {
+    provider: string;
+    providerEventId: string;
+    rawBody: string;
+    outcome: WebhookReceiptOutcome;
+    errorCode?: string;
+  },
+): Promise<void> {
+  const provider = input.provider.trim().toLowerCase();
+  const providerEventId = input.providerEventId.trim().slice(0, 200);
+  if (!provider || !providerEventId) return;
+  const bodySha256 = createHash('sha256').update(input.rawBody, 'utf8').digest('hex');
+  const { error } = await client.from('webhook_receipts').upsert({
+    provider,
+    provider_event_id: providerEventId,
+    body_sha256: bodySha256,
+    outcome: input.outcome,
+    error_code: input.errorCode?.trim().slice(0, 100) || null,
+    processed_at: input.outcome === 'ACCEPTED' || input.outcome === 'DUPLICATE' ? new Date().toISOString() : null,
+  }, { onConflict: 'provider,provider_event_id' });
+  if (error) console.error('Could not persist webhook receipt', error.message);
+}
+
+export function fallbackWebhookEventId(request: ApiRequest, rawBody: string): string {
+  const candidate = header(request.headers, 'taypi-webhook-id')
+    ?? header(request.headers, 'x-webhook-id')
+    ?? header(request.headers, 'x-event-id');
+  return candidate?.trim().slice(0, 200) || `body:${createHash('sha256').update(rawBody, 'utf8').digest('hex')}`;
 }
 
 function isProduction(): boolean {

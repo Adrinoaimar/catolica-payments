@@ -66,6 +66,10 @@ La ruta `/dev/mock-payment/:reference` debe existir solo cuando el entorno no es
 
 Para efectivo, seleccione el monto, **Efectivo** y confirme. Se crea una operación `PAID` con `provider=CASH` y el usuario autenticado como registrador.
 
+### Administración
+
+Los usuarios con rol `ADMIN` tienen una pantalla de administración para invitar usuarios, cambiar roles (sin poder quitarse el último administrador) y reemplazar los montos rápidos. Estas acciones usan `Supabase Auth` y funciones SQL protegidas; los cajeros solo leen los montos activos mediante `GET /api/quick-amounts`.
+
 ## Estados y webhooks
 
 Las operaciones digitales siguen `PENDING -> PAID`, o `PENDING -> EXPIRED`, `FAILED` o `CANCELLED` según resultado. Los endpoints públicos son:
@@ -77,7 +81,7 @@ POST /api/webhooks/mercadopago (reservado; adaptador específico pendiente)
 POST /api/webhooks/culqi (reservado; adaptador específico pendiente)
 ```
 
-Cada adaptador debe autenticar el evento, buscar la referencia, comparar monto y moneda, validar `provider_payment_id`, rechazar duplicados de forma idempotente y registrar `payment_events` dentro de una operación atómica. Responda rápido con HTTP 200 solo después de aceptar el evento; eventos inválidos deben rechazarse con el código apropiado sin modificar pagos.
+Cada adaptador debe autenticar el evento, buscar la referencia, comparar monto y moneda, validar `provider_payment_id`, rechazar duplicados de forma idempotente y registrar `payment_events` dentro de una operación atómica. Responda rápido con HTTP 200 solo después de aceptar el evento; eventos inválidos deben rechazarse con el código apropiado sin modificar pagos. `webhook_receipts` conserva el identificador de entrega, hash del body, resultado y código de error para observabilidad sin duplicar payloads sensibles.
 
 Un administrador puede cancelar una operación digital `PENDING` desde la pantalla de cobro. La API `POST /api/payments/:reference/cancel` exige sesión Bearer con rol `ADMIN`, consulta el estado del proveedor antes de cancelar y registra la transición y su motivo en `payment_events` dentro de una operación atómica. Nunca puede convertir una operación terminal en `CANCELLED`.
 
@@ -87,7 +91,7 @@ El webhook del proveedor es el camino principal. Como respaldo, `GET /api/cron/r
 
 TAYPI también reintenta webhooks y permite reenvío manual desde su panel. La reconciliación por `GET /api/v1/payments/:payment_id` es una red de seguridad, no reemplaza la firma HMAC ni la auditoría. [SDK JavaScript de TAYPI](https://docs.taypi.pe/sdks/javascript), [Webhooks de TAYPI](https://docs.taypi.pe/webhooks)
 
-Alternativas evaluadas: reenvío/reintentos nativos de TAYPI, polling server-side centralizado (implementado mediante cron y acción excepcional), Supabase Cron/`pg_cron` llamando esta ruta, y Supabase Queues para una futura cola durable. El cliente TAYPI reintenta solo fallos transitorios HTTP (429/5xx/timeouts), con backoff acotado e idempotency keys. Cada pasada del reconciliador inspecciona como máximo 25 pendientes y consulta hasta cuatro en paralelo para no convertir una función serverless en un proceso ilimitado. Supabase Realtime queda reservado para refrescar la interfaz; `onSuccess` de un checkout o cualquier señal del navegador no confirma dinero. Referencias: [Supabase Cron](https://supabase.com/docs/guides/cron), [Supabase Queues](https://supabase.com/docs/guides/queues).
+Alternativas evaluadas: reenvío/reintentos nativos de TAYPI, polling server-side centralizado (implementado mediante cron y acción excepcional), Supabase Cron/`pg_cron` llamando esta ruta, y Supabase Queues para una futura cola durable. El cliente TAYPI reintenta solo fallos transitorios HTTP (429/5xx/timeouts), con backoff acotado e idempotency keys. Cada pasada del reconciliador inspecciona como máximo 25 pendientes y consulta hasta cuatro en paralelo; un lease en Postgres evita ejecuciones solapadas. Supabase Realtime es el canal principal para refrescar la interfaz; la app solo usa lectura del ledger como respaldo cuando el canal no está saludable. `onSuccess` de un checkout o cualquier señal del navegador no confirma dinero. Referencias: [Supabase Cron](https://supabase.com/docs/guides/cron), [Supabase Queues](https://supabase.com/docs/guides/queues).
 
 ## Activar Taypi
 
@@ -137,6 +141,12 @@ Para la activación y el smoke test de producción, siga [RELEASE.md](RELEASE.md
 7. Proteja Production con claves reales solo después de revisar logs y pruebas.
 
 Cada push a `main` puede generar el despliegue de producción mediante la integración oficial GitHub-Vercel. No use GitHub Pages para secretos, funciones serverless o webhooks.
+
+### PWA y caché
+
+La build de producción incluye `manifest.webmanifest`, el icono institucional y `sw.js`. El navegador registra el service worker únicamente cuando `import.meta.env.PROD` es verdadero. El worker usa una caché limitada al shell (`/`, `index.html`, `/assets/`, `/icons/` y el manifest): las navegaciones usan red primero y solo muestran el shell guardado si no hay conexión.
+
+No se interceptan métodos distintos de `GET`, rutas `/api/`, webhooks, `/dev/`, rutas de Supabase ni solicitudes cross-origin. Por ello, el modo offline nunca confirma pagos ni muestra una confirmación financiera guardada; las operaciones siempre dependen del API autenticado y del ledger server-side. Cuando se publica una nueva build, los assets versionados por Vite evitan colisiones; si cambia el worker o algún asset no versionado, se deben incrementar sus nombres de caché para que la activación elimine la versión anterior.
 
 ## GitHub
 

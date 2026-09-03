@@ -4,6 +4,7 @@ import {
   HttpError,
   paymentContext,
   publicPayment,
+  serverClient,
   sendError,
   type ApiRequest,
   type ApiResponse,
@@ -18,18 +19,35 @@ export default async function handler(request: ApiRequest, response: ApiResponse
 
   try {
     assertCronSecret(request);
-    const { service } = paymentContext();
-    const result = await service.reconcilePendingPayments();
-    // Expose partial failures to the scheduler/monitoring system so a later
-    // invocation retries rows that could not be reconciled.
-    response.status(result.errors > 0 ? 503 : 200).json({
-      ok: true,
-      inspected: result.inspected,
-      reconciled: result.reconciled,
-      skipped: result.skipped,
-      errors: result.errors,
-      payments: result.payments.map(publicPayment),
+    const client = serverClient();
+    const { data: lockToken, error: lockError } = await client.rpc('acquire_job_lock', {
+      p_job_name: 'payments-reconcile',
+      p_lease_seconds: 240,
     });
+    if (lockError) throw new HttpError(503, 'Reconciliation lock is not configured');
+    if (!lockToken) {
+      response.status(202).json({ ok: true, skipped: 'already_running' });
+      return;
+    }
+    try {
+      const { service } = paymentContext(client);
+      const result = await service.reconcilePendingPayments();
+      // Expose partial failures to the scheduler/monitoring system so a later
+      // invocation retries rows that could not be reconciled.
+      response.status(result.errors > 0 ? 503 : 200).json({
+        ok: true,
+        inspected: result.inspected,
+        reconciled: result.reconciled,
+        skipped: result.skipped,
+        errors: result.errors,
+        payments: result.payments.map(publicPayment),
+      });
+    } finally {
+      await client.rpc('release_job_lock', {
+        p_job_name: 'payments-reconcile',
+        p_lock_token: lockToken as string,
+      });
+    }
   } catch (error) {
     sendError(response, error);
   }

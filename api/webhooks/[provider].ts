@@ -1,10 +1,14 @@
-import { handleWebhook, PaymentService, SupabasePaymentRepository, type Payment } from '../../src/server';
+import { PaymentService, SupabasePaymentRepository, type Payment } from '../../src/server';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { MockPaymentProvider } from '../../src/server/providers/MockPaymentProvider';
+import { ProviderError } from '../../src/server/providers/PaymentProvider';
 import {
   HttpError,
   paymentContext,
   readRawBody,
   publicPayment,
+  fallbackWebhookEventId,
+  recordWebhookReceipt,
   serverClient,
   sendError,
   type ApiRequest,
@@ -16,17 +20,49 @@ const REAL_PROVIDERS = new Set(['taypi', 'culqi', 'mercadopago']);
 
 export default async function handler(request: ApiRequest & Partial<AsyncIterable<Uint8Array>>, response: ApiResponse): Promise<void> {
   if (request.method !== 'POST') { response.status(405).json({ ok: false, error: 'Method not allowed' }); return; }
+  let rawBody = '';
+  let client: SupabaseClient | undefined;
+  let receiptEventId = '';
   const providerName = singleQuery(request.query?.provider)?.toLowerCase() ?? '';
   try {
-    const body = await readRawBody(request);
+    rawBody = await readRawBody(request);
     const context = paymentContextForWebhook(providerName);
-    const result = await handleWebhook({ rawBody: body, headers: request.headers }, context.provider, context.service);
-    const responseBody = result.body.payment && typeof result.body.payment === 'object'
-      ? { ...result.body, payment: publicPayment(result.body.payment as Payment) }
-      : result.body;
-    response.status(result.status).json(responseBody);
+    client = context.client;
+    receiptEventId = fallbackWebhookEventId(request, rawBody);
+    const verified = await context.provider.verifyWebhook({ rawBody, headers: request.headers });
+    receiptEventId = verified.eventId;
+    const result = await context.service.processWebhook(verified);
+    await recordWebhookReceipt(client, {
+      provider: providerName,
+      providerEventId: receiptEventId,
+      rawBody,
+      outcome: result.changed ? 'ACCEPTED' : 'DUPLICATE',
+    });
+    response.status(200).json({ ok: true, changed: result.changed, payment: publicPayment(result.payment as Payment) });
   } catch (error) {
+    if (client && rawBody && receiptEventId) {
+      const errorCode = error && typeof error === 'object' && 'code' in error ? String((error as { code?: unknown }).code) : 'WEBHOOK_ERROR';
+      await recordWebhookReceipt(client, {
+        provider: providerName,
+        providerEventId: receiptEventId,
+        rawBody,
+        outcome: isReceiptRejection(error) ? 'REJECTED' : 'ERROR',
+        errorCode,
+      });
+    }
     if (error instanceof HttpError) { response.status(error.statusCode).json({ ok: false, error: error.message }); return; }
+    if (error instanceof ProviderError) { response.status(error.statusCode).json({ ok: false, code: error.code, error: error.message }); return; }
+    // Preserve the framework-neutral webhook contract: provider/payment
+    // identity misses are not server faults and should be retry-classified by
+    // the provider separately from malformed or mismatched events.
+    if (error instanceof Error && /not found/i.test(error.message)) {
+      response.status(404).json({ ok: false, code: 'NOT_FOUND', error: error.message });
+      return;
+    }
+    if (error instanceof Error && /mismatch|invalid|payable/i.test(error.message)) {
+      response.status(400).json({ ok: false, code: 'INVALID_WEBHOOK', error: error.message });
+      return;
+    }
     sendError(response, error);
   }
 }
@@ -38,13 +74,13 @@ function paymentContextForWebhook(name: string) {
     const client = serverClient();
     const provider = new MockPaymentProvider({ allowUnknownWebhook: true });
     const service = new PaymentService({ provider, repository: new SupabasePaymentRepository(client) });
-    return { provider, service };
+    return { provider, service, client };
   }
   if (!REAL_PROVIDERS.has(name)) throw new HttpError(404, 'Webhook provider is not active');
   const client = serverClient();
   const context = paymentContext(client);
   if (context.provider.name !== name) throw new HttpError(404, 'Webhook provider is not active');
-  return context;
+  return { ...context, client };
 }
 
 function singleQuery(value: string | string[] | undefined): string | undefined {
@@ -54,4 +90,13 @@ function singleQuery(value: string | string[] | undefined): string | undefined {
 
 function isProduction(): boolean {
   return process.env.NODE_ENV === 'production' || process.env.VERCEL_ENV === 'production';
+}
+
+function isReceiptRejection(error: unknown): boolean {
+  if (error instanceof HttpError) return error.statusCode < 500;
+  const code = error && typeof error === 'object' && 'code' in error
+    ? String((error as { code?: unknown }).code)
+    : '';
+  if (['INVALID_SIGNATURE', 'INVALID_WEBHOOK', 'P0002', '22023'].includes(code)) return true;
+  return error instanceof Error && /not found|mismatch|invalid|payable/i.test(error.message);
 }

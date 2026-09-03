@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseBody, parseRequestAmount, publicPayment } from '../api/_shared';
+import { parseBody, parseRequestAmount, publicPayment, fallbackWebhookEventId, recordWebhookReceipt } from '../api/_shared';
 
 describe('server API input and response boundaries', () => {
   it('accepts integer cents or decimal soles, rejects ambiguous amounts', () => {
@@ -25,5 +25,26 @@ describe('server API input and response boundaries', () => {
     expect(value).toMatchObject({ method: 'DIGITAL', qrCode: 'data:image/svg+xml;base64,abc123' });
     expect(value).not.toHaveProperty('secret_token');
     expect(value).not.toHaveProperty('providerData');
+  });
+
+  it('derives a stable webhook receipt id without trusting the payload', () => {
+    expect(fallbackWebhookEventId({ headers: { 'Taypi-Webhook-Id': 'delivery-1' } }, '{}')).toBe('delivery-1');
+    expect(fallbackWebhookEventId({ headers: {} }, '{}')).toMatch(/^body:[a-f0-9]{64}$/);
+  });
+
+  it('stores only webhook delivery metadata and a body hash', async () => {
+    const calls: Array<{ row: Record<string, unknown>; options: unknown }> = [];
+    const client = {
+      from() {
+        return {
+          upsert: async (row: Record<string, unknown>, options: unknown) => { calls.push({ row, options }); return { error: null }; },
+        };
+      },
+    } as never;
+    await recordWebhookReceipt(client, { provider: 'Taypi', providerEventId: 'delivery-1', rawBody: '{"ok":true}', outcome: 'ACCEPTED' });
+    expect(calls[0].row).toMatchObject({ provider: 'taypi', provider_event_id: 'delivery-1', outcome: 'ACCEPTED' });
+    expect(calls[0].row.body_sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(calls[0].row).not.toHaveProperty('raw_payload');
+    expect(calls[0].options).toEqual({ onConflict: 'provider,provider_event_id' });
   });
 });

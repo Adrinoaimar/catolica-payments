@@ -1,0 +1,27 @@
+{
+  "name": "Católica Pay · Grupo La Católica",
+  "short_name": "Católica Pay",
+  "description": "Caja de cobros digitales y efectivo de Grupo La Católica",
+  "lang": "es-PE",
+  "dir": "ltr",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#f7f9fc",
+  "theme_color": "#0b2149",
+  "icons": [
+    {
+      "src": "/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}
