@@ -161,7 +161,9 @@ export class PaymentService {
    * cashier's open payment screen when a scheduled job is not available. */
   async reconcilePaymentByReference(reference: string): Promise<{ payment: Payment; changed: boolean }> {
     const provider = this.digitalProvider();
-    const payment = await this.options.repository.findByReference(reference);
+    // Apply the same local-expiry rule as the scheduled pass before asking the
+    // provider. A late result must never reopen a ledger row already expired.
+    const payment = await this.findPaymentByReference(reference);
     if (!payment) throw new Error('Payment not found');
     if (payment.status !== 'PENDING' || payment.provider !== provider.name || !payment.providerPaymentId) {
       return { payment, changed: false };

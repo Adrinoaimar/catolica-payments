@@ -14,7 +14,7 @@ Nunca se marca un pago como exitoso por una señal del frontend. Nunca se usa mo
 - Backend: Node.js/TypeScript en funciones serverless.
 - Persistencia y autenticación: Supabase (PostgreSQL, Auth y Realtime).
 - Despliegue: Vercel conectado a GitHub.
-- Proveedores: `MockPaymentProvider`, `TaypiProvider`, `CulqiProvider` y `MercadoPagoProvider` detrás de una interfaz común.
+- Proveedores: `MockPaymentProvider` y `TaypiProvider` están disponibles; las clases genéricas para Culqi/Mercado Pago quedan reservadas hasta completar sus contratos específicos.
 
 Detalles de flujos, estados, rutas y límites: [ARCHITECTURE.md](ARCHITECTURE.md). Controles de seguridad: [SECURITY.md](SECURITY.md). Trabajo por fases: [PLAN.md](PLAN.md).
 
@@ -73,8 +73,8 @@ Las operaciones digitales siguen `PENDING -> PAID`, o `PENDING -> EXPIRED`, `FAI
 ```text
 POST /api/webhooks/mock
 POST /api/webhooks/taypi
-POST /api/webhooks/mercadopago
-POST /api/webhooks/culqi
+POST /api/webhooks/mercadopago (reservado; adaptador específico pendiente)
+POST /api/webhooks/culqi (reservado; adaptador específico pendiente)
 ```
 
 Cada adaptador debe autenticar el evento, buscar la referencia, comparar monto y moneda, validar `provider_payment_id`, rechazar duplicados de forma idempotente y registrar `payment_events` dentro de una operación atómica. Responda rápido con HTTP 200 solo después de aceptar el evento; eventos inválidos deben rechazarse con el código apropiado sin modificar pagos.
@@ -89,7 +89,7 @@ Alternativas evaluadas: reenvío/reintentos nativos de TAYPI, polling server-sid
 
 ## Activar Taypi
 
-La integración de `TaypiProvider` usa la API REST oficial de TAYPI. Configure las claves en el entorno serverless (nunca en `VITE_*`) y cambie:
+La integración operativa actual es `TaypiProvider` y usa la API REST oficial de TAYPI. Configure las claves en el entorno serverless (nunca en `VITE_*`) y cambie:
 
 ```text
 PAYMENT_PROVIDER=taypi
@@ -104,7 +104,7 @@ TAYPI_WEBHOOK_SECRET=...
 TAYPI_API_URL=https://app.taypi.pe
 ```
 
-Para sandbox use claves `taypi_pk_test_*`/`taypi_sk_test_*`, `TAYPI_SANDBOX=true` y `TAYPI_API_URL=https://sandbox.taypi.pe`. Si `TAYPI_API_URL` queda vacío, el adaptador selecciona sandbox para una public key `*_test_*` y producción para una public key `*_live_*`.
+Para sandbox use claves `taypi_pk_test_*`/`taypi_sk_test_*`, `TAYPI_SANDBOX=true` y `TAYPI_API_URL=https://sandbox.taypi.pe`. Si `TAYPI_API_URL` queda vacío, el adaptador selecciona sandbox para una public key `*_test_*` y producción para una public key `*_live_*`. Culqi y Mercado Pago permanecen reservados hasta implementar y probar sus contratos específicos; seleccionar uno falla cerrado.
 
 El adaptador llama `POST /api/v1/payments` con monto decimal (por ejemplo, `"30.50"`), `currency: "PEN"` y la referencia como `Idempotency-Key`. Firma cada request con HMAC-SHA256 sobre `{timestamp}\n{method}\n{path}\n{body}`, envía `Authorization: Bearer <TAYPI_PUBLIC_KEY>` y conserva el `payment_id`, `qr_image`, `checkout_url` y `expires_at` devueltos por TAYPI. Las consultas usan `GET /api/v1/payments/:payment_id`; las cancelaciones, `POST /api/v1/payments/:payment_id/cancel`.
 
@@ -123,6 +123,8 @@ Antes de procesar dinero real, complete la verificación KYB de la cuenta de TAY
 El navegador usa únicamente la URL y anon key. La service-role key se reserva para funciones serverless y tareas administrativas.
 
 ## Despliegue en Vercel
+
+Para la activación y el smoke test de producción, siga [RELEASE.md](RELEASE.md); separa las comprobaciones del código de las credenciales y cuentas externas.
 
 1. Suba el repositorio a GitHub.
 2. En Vercel, importe el repositorio y seleccione el framework detectado por el proyecto.

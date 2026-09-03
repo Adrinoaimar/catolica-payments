@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { assertCronSecret } from '../api/cron/reconcile-payments';
-import { InMemoryPaymentRepository, MockPaymentProvider, PaymentService } from '../src/server';
+import { createPaymentProvider, InMemoryPaymentRepository, MockPaymentProvider, PaymentService } from '../src/server';
 
 function setup() {
   const repository = new InMemoryPaymentRepository();
@@ -64,6 +64,22 @@ describe('payment reconciliation', () => {
     expect(result.payment.status).toBe('FAILED');
     expect(repository.events.size).toBe(1);
   });
+
+  it('applies local expiry before an on-demand provider reconciliation', async () => {
+    let now = new Date('2026-09-02T12:00:00.000Z');
+    const repository = new InMemoryPaymentRepository();
+    const provider = new MockPaymentProvider();
+    const service = new PaymentService({ repository, provider, now: () => now, expiryMinutes: 1 });
+    const created = await service.createDigitalPayment({ amountCents: 3000 });
+    provider.simulateSuccessfulPayment(created.payment.providerPaymentId!);
+    now = new Date('2026-09-02T12:02:00.000Z');
+
+    const result = await service.reconcilePaymentByReference(created.payment.reference);
+
+    expect(result.changed).toBe(false);
+    expect(result.payment.status).toBe('EXPIRED');
+    expect(repository.events.size).toBe(1);
+  });
 });
 
 describe('reconciliation cron authentication', () => {
@@ -72,5 +88,13 @@ describe('reconciliation cron authentication', () => {
     expect(() => assertCronSecret({ method: 'GET', headers: { authorization: 'Bearer cron-test-secret' } })).not.toThrow();
     expect(() => assertCronSecret({ method: 'GET', headers: { authorization: 'Bearer wrong' } })).toThrow('Invalid cron secret');
     vi.unstubAllEnvs();
+  });
+
+  it('fails closed for provider adapters that are not implemented', () => {
+    expect(() => createPaymentProvider({
+      PAYMENT_PROVIDER: 'culqi',
+      CULQI_SECRET_KEY: 'secret',
+      CULQI_WEBHOOK_SECRET: 'webhook',
+    })).toThrow('adapter is not implemented');
   });
 });

@@ -19,12 +19,13 @@ function App() {
   const [payments, setPayments] = useState<Payment[]>(() => loadPayments())
   const [activePayment, setActivePayment] = useState<Payment | null>(null)
   const [ledgerError, setLedgerError] = useState<string | null>(null)
+  const [realtimeHealthy, setRealtimeHealthy] = useState(false)
   const [mobileMenu, setMobileMenu] = useState(false)
   const [path, setPath] = useState(() => window.location.pathname)
   useEffect(() => { const sync = () => { const next = loadPayments(); setPayments(next); setActivePayment((current) => current ? next.find((item) => item.reference === current.reference) ?? current : current) }; window.addEventListener('catolica:payments-updated', sync); window.addEventListener('storage', sync); return () => { window.removeEventListener('catolica:payments-updated', sync); window.removeEventListener('storage', sync) } }, [])
   useEffect(() => { const syncPath = () => setPath(window.location.pathname); window.addEventListener('popstate', syncPath); return () => window.removeEventListener('popstate', syncPath) }, [])
   useEffect(() => {
-    if (!user) { setPayments(loadPayments()); setLedgerError(null); return }
+    if (!user) { setPayments(loadPayments()); setLedgerError(null); setRealtimeHealthy(false); return }
     let active = true
     void listPayments().then((next) => {
       if (!active) return
@@ -37,7 +38,7 @@ function App() {
     return () => { active = false }
   }, [user])
   useEffect(() => {
-    if (!user || isDemoMode) return
+    if (!user || isDemoMode) { setRealtimeHealthy(false); return }
     let active = true
     const unsubscribe = subscribeToPayments({
       userId: user.id,
@@ -61,8 +62,10 @@ function App() {
       onStatus: (status, error) => {
         if (!active) return
         if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          setRealtimeHealthy(false)
           setLedgerError(error?.message || 'Actualización en tiempo real no disponible. Se reintentará automáticamente.')
         } else if (status === 'SUBSCRIBED') {
+          setRealtimeHealthy(true)
           setLedgerError((current) => current?.startsWith('Actualización en tiempo real') ? null : current)
           // Reconcile after every reconnect. Realtime does not replay rows
           // missed while the browser was offline.
@@ -71,11 +74,27 @@ function App() {
             setPayments(next)
             setActivePayment((current) => current ? next.find((item) => item.reference === current.reference) ?? current : current)
           }).catch(() => { /* current snapshot remains until next event */ })
+        } else if (status === 'CLOSED') {
+          setRealtimeHealthy(false)
+          setLedgerError('Actualización en tiempo real cerrada. Se mantiene sincronización de respaldo.')
         }
       },
     })
     return () => { active = false; unsubscribe() }
   }, [user])
+  useEffect(() => {
+    if (!user || isDemoMode) return
+    // Realtime is the primary channel. This bounded fallback keeps dashboard
+    // and operations current during reconnects or provider/network outages.
+    const interval = window.setInterval(() => {
+      if (realtimeHealthy) return
+      void listPayments().then((next) => {
+        setPayments(next)
+        setActivePayment((current) => current ? next.find((item) => item.reference === current.reference) ?? current : current)
+      }).catch(() => { /* the next interval retries without replacing the snapshot */ })
+    }, 15000)
+    return () => window.clearInterval(interval)
+  }, [user, realtimeHealthy])
   const paidPayment = (payment: Payment) => { setActivePayment(payment); setPayments((current) => { const next = current.map((item) => item.id === payment.id || item.reference === payment.reference ? payment : item); savePayments(next); return next }) }
   const simulatorReference = isDemoMode ? path.match(/^\/dev\/mock-payment\/([^/]+)/)?.[1] : undefined
   if (simulatorReference) return <MockSimulator reference={decodeURIComponent(simulatorReference)} payments={payments} onComplete={(payment) => { paidPayment(payment); window.history.pushState({}, '', '/'); setPath('/') }} />

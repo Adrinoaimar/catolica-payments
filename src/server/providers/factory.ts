@@ -1,5 +1,4 @@
 import { MockPaymentProvider } from './MockPaymentProvider';
-import { CulqiProvider, MercadoPagoProvider } from './HttpPaymentProvider';
 import { TaypiProvider } from './TaypiProvider';
 import type { PaymentProvider } from './PaymentProvider';
 import { ProviderError, providerFromEnvironment } from './PaymentProvider';
@@ -14,12 +13,13 @@ export function createPaymentProvider(env: Record<string, string | undefined> = 
       secretKey: requireValue(env.TAYPI_SECRET_KEY, 'TAYPI_SECRET_KEY'),
       webhookSecret: requireValue(env.TAYPI_WEBHOOK_SECRET, 'TAYPI_WEBHOOK_SECRET'),
     });
-    case 'culqi': return new CulqiProvider({
-      baseUrl: env.CULQI_API_URL ?? 'https://api.culqi.com', apiKey: requireValue(env.CULQI_SECRET_KEY, 'CULQI_SECRET_KEY'), webhookSecret: requireValue(env.CULQI_WEBHOOK_SECRET, 'CULQI_WEBHOOK_SECRET'),
-    });
-    case 'mercadopago': return new MercadoPagoProvider({
-      baseUrl: env.MERCADOPAGO_API_URL ?? 'https://api.mercadopago.com', apiKey: requireValue(env.MERCADOPAGO_ACCESS_TOKEN, 'MERCADOPAGO_ACCESS_TOKEN'), webhookSecret: requireValue(env.MERCADOPAGO_WEBHOOK_SECRET, 'MERCADOPAGO_WEBHOOK_SECRET'),
-    });
+    // Keep the generic HTTP classes available for future adapters, but fail
+    // closed here: Culqi and Mercado Pago require provider-specific request
+    // and webhook contracts and must not be presented as production-ready by
+    // a generic `/payments` implementation.
+    case 'culqi':
+    case 'mercadopago':
+      throw new ProviderError(`${providerFromEnvironment(env)} adapter is not implemented`, 500, 'PROVIDER_NOT_CONFIGURED');
     default: throw new ProviderError('Unsupported provider', 500, 'INVALID_PROVIDER');
   }
 }

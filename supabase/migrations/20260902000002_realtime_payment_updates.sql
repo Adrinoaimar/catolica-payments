@@ -8,6 +8,18 @@ create table if not exists public.payment_updates (
 
 alter table public.payment_updates enable row level security;
 
+-- Postgres privileges are checked before RLS by Realtime's postgres_changes
+-- listener. Keep the grant explicit so a hardened project does not silently
+-- reject the channel even when the policy below is correct.
+grant usage on schema public to authenticated;
+grant select on public.payment_updates to authenticated;
+
+-- The browser uses serverless API routes for ledger reads. Do not expose the
+-- raw ledger or payment_events through PostgREST: those rows contain
+-- provider_data and raw_payload that are intentionally server-only.
+revoke all on public.payments from anon, authenticated;
+revoke all on public.payment_events from anon, authenticated;
+
 drop policy if exists payment_updates_authenticated_read on public.payment_updates;
 create policy payment_updates_authenticated_read on public.payment_updates
   for select to authenticated
@@ -62,4 +74,3 @@ begin
   end if;
 end;
 $$;
-

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ArrowIcon, CheckIcon, ClockIcon, CopyIcon, InfoIcon, QrIcon } from '../components/Icons'
+import { ArrowIcon, CheckIcon, ClockIcon, CloseIcon, CopyIcon, InfoIcon, QrIcon } from '../components/Icons'
 import { QrCode } from '../components/QrCode'
 import { formatSoles } from '../lib/format'
 import { simulateMockPayment } from '../lib/demoStore'
@@ -7,6 +7,29 @@ import { apiFetch } from '../lib/supabase'
 import type { Payment } from '../types'
 
 interface PaymentPageProps { payment: Payment; onPaid: (payment: Payment) => void; onNew: () => void; onSimulator: (payment: Payment) => void; demoMode?: boolean }
+
+type TerminalPaymentStatus = Exclude<Payment['status'], 'PENDING' | 'PAID'>
+
+const terminalStatusCopy: Record<TerminalPaymentStatus, { eyebrow: string; title: string; description: string; label: string }> = {
+  FAILED: {
+    eyebrow: 'PAGO NO COMPLETADO',
+    title: 'No se pudo completar el pago',
+    description: 'El proveedor reportó que esta operación no terminó correctamente. No vuelvas a compartir este código.',
+    label: 'Pago fallido',
+  },
+  EXPIRED: {
+    eyebrow: 'CÓDIGO VENCIDO',
+    title: 'El cobro expiró',
+    description: 'Terminó el plazo disponible para pagar. Este código QR ya no puede utilizarse.',
+    label: 'Cobro vencido',
+  },
+  CANCELLED: {
+    eyebrow: 'COBRO CANCELADO',
+    title: 'Operación cancelada',
+    description: 'Esta operación fue cancelada y no puede volver a pagarse con este código.',
+    label: 'Cobro cancelado',
+  },
+}
 
 export function PaymentPage({ payment, onPaid, onNew, onSimulator, demoMode = false }: PaymentPageProps) {
   const [current, setCurrent] = useState(payment)
@@ -20,6 +43,10 @@ export function PaymentPage({ payment, onPaid, onNew, onSimulator, demoMode = fa
   async function handleCopy() { await navigator.clipboard?.writeText(current.reference); setCopied(true); window.setTimeout(() => setCopied(false), 1800) }
   async function fallbackDemoPay() { setPaying(true); const result = await simulateMockPayment(current); setCurrent(result); onPaid(result); setPaying(false) }
 
-  if (current.status === 'PAID') return <div className="page-stack payment-page"><div className="payment-success"><div className="success-orb"><CheckIcon size={38} /></div><div className="eyebrow eyebrow--success">PAGO CONFIRMADO</div><h1>¡Pago recibido!</h1><div className="success-amount">{formatSoles(current.amountCents)}</div><p>La operación fue confirmada y registrada correctamente.</p><div className="success-reference"><span>Operación</span><strong>{current.reference}</strong></div><div className="success-actions"><button className="primary-button" onClick={onNew}>Nuevo cobro <ArrowIcon size={18} /></button><button className="secondary-button" onClick={() => setCurrent({ ...current, status: 'PENDING' })}>Ver comprobante</button></div></div></div>
+  if (current.status === 'PAID') return <div className="page-stack payment-page"><div className="payment-success"><div className="success-orb"><CheckIcon size={38} /></div><div className="eyebrow eyebrow--success">PAGO CONFIRMADO</div><h1>¡Pago recibido!</h1><div className="success-amount">{formatSoles(current.amountCents)}</div><p>La operación fue confirmada y registrada correctamente.</p><div className="success-reference"><span>Operación</span><strong>{current.reference}</strong></div><div className="success-actions"><button className="primary-button" onClick={onNew}>Nuevo cobro <ArrowIcon size={18} /></button><button className="secondary-button" onClick={handleCopy}><CopyIcon size={15} />{copied ? 'Referencia copiada' : 'Copiar referencia'}</button></div></div></div>
+  if (current.status !== 'PENDING') {
+    const terminal = terminalStatusCopy[current.status]
+    return <div className="page-stack payment-page"><div className={`payment-terminal payment-terminal--${current.status.toLowerCase()}`} role="status" aria-live="polite"><div className="terminal-orb">{current.status === 'EXPIRED' ? <ClockIcon size={34} /> : current.status === 'CANCELLED' ? <CloseIcon size={34} /> : <InfoIcon size={34} />}</div><div className="eyebrow eyebrow--terminal">{terminal.eyebrow}</div><h1>{terminal.title}</h1><div className="terminal-amount">{formatSoles(current.amountCents)}</div><p>{terminal.description}</p><div className="terminal-reference"><div><span>Estado</span><strong>{terminal.label}</strong></div><div><span>Referencia</span><strong>{current.reference}</strong></div></div><div className="terminal-actions"><button className="primary-button" onClick={onNew}>Crear nuevo cobro <ArrowIcon size={18} /></button><button className="secondary-button" onClick={handleCopy}><CopyIcon size={15} />{copied ? 'Referencia copiada' : 'Copiar referencia'}</button></div><small className="terminal-note">El estado mostrado proviene del proveedor de pagos.</small></div></div>
+  }
   return <div className="page-stack payment-page"><div className="payment-heading"><button className="back-link" onClick={onNew}>← Volver a nueva cobranza</button><div className="eyebrow">COBRO DIGITAL</div><h1>Esperando el pago</h1><p>Comparte este código QR con tu cliente para completar el pago.</p></div><div className="payment-layout"><section className="panel payment-qr-card"><div className="payment-qr-card__head"><span className="live-pill live-pill--pending"><span className="status-dot status-dot--amber" /> Esperando confirmación</span><span className="secure-label"><InfoIcon size={14} /> Seguro</span></div><div className="qr-wrap">{current.qrCode ? <img className="provider-qr-image" src={current.qrCode} alt={`Código QR de ${current.reference}`} /> : demoMode ? <QrCode value={current.reference} /> : <div className="provider-qr-missing"><InfoIcon size={22} /><strong>QR no disponible</strong><small>El proveedor no devolvió un código QR para esta operación.</small></div>}{current.checkoutUrl && <a className="secondary-button provider-checkout-link" href={current.checkoutUrl} target="_blank" rel="noreferrer">Abrir checkout seguro <ArrowIcon size={15} /></a>}<div className="qr-scan-hint"><QrIcon size={16} /> Escanea con la billetera digital</div></div><div className="payment-amount-label">TOTAL A PAGAR</div><div className="payment-amount">{formatSoles(current.amountCents)}</div><div className="payment-reference"><span>Referencia</span><strong>{current.reference}</strong><button className="icon-button" onClick={handleCopy} aria-label="Copiar referencia"><CopyIcon size={16} />{copied && <em>Copiado</em>}</button></div></section><aside className="payment-details"><div className="panel expiry-card"><div className="expiry-card__icon"><ClockIcon size={20} /></div><div><span>Este código vence en</span><strong>{mins}:{secs}</strong></div><small>La operación se cancela automáticamente al vencer.</small></div><div className="panel operation-card"><div className="operation-card__title">DETALLE DE OPERACIÓN <span className="step-badge">03</span></div><div className="operation-row"><span>Monto</span><strong>{formatSoles(current.amountCents)}</strong></div><div className="operation-row"><span>Método</span><strong><span className="method-dot" /> Pago digital</strong></div><div className="operation-row"><span>Cajero</span><strong>{current.createdBy}</strong></div><div className="operation-row"><span>Creada</span><strong>{new Date(current.createdAt).toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' })}</strong></div></div>{demoMode && <div className="panel simulator-card"><div><span className="simulator-card__icon">⚙</span><p><strong>¿Estás probando el sistema?</strong><small>Usa el simulador para confirmar este pago.</small></p></div><button className="secondary-button" disabled={paying} onClick={() => onSimulator(current)}>Abrir simulador <ArrowIcon size={15} /></button><button className="ghost-demo-button" disabled={paying} onClick={fallbackDemoPay}>{paying ? 'Procesando…' : 'Confirmar demo rápidamente'}</button></div>}</aside></div></div>
 }
