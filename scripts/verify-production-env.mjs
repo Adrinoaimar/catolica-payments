@@ -26,6 +26,15 @@ if (String(env.VITE_DEMO_MODE ?? '').trim().toLowerCase() === 'true') {
   errors.push('VITE_DEMO_MODE must not be true in production')
 }
 
+if (String(env.TAYPI_SANDBOX ?? '').trim().toLowerCase() === 'true') {
+  errors.push('TAYPI_SANDBOX must not be true in production')
+}
+
+if (/^taypi_(?:pk|sk)_test_/i.test(String(env.TAYPI_PUBLIC_KEY ?? '').trim())
+  || /^taypi_(?:pk|sk)_test_/i.test(String(env.TAYPI_SECRET_KEY ?? '').trim())) {
+  errors.push('TAYPI test keys must not be used in production')
+}
+
 if (String(env.CRON_SECRET ?? '').trim().length < 32) {
   errors.push('CRON_SECRET must contain at least 32 characters')
 }
