@@ -21,22 +21,23 @@ Construir una caja web para Grupo La Católica que genere cobros digitales por o
 
 ### Fase 1 — MVP verificable
 
-- [ ] Instalar dependencias y configurar scripts `test` y `build`.
-- [ ] Crear migraciones y políticas RLS.
-- [ ] Implementar autenticación y autorización por rol (`ADMIN`, `CASHIER`).
-- [ ] Implementar servicio de pagos y adaptador mock.
-- [ ] Implementar endpoints de cobro, efectivo, consulta y `/api/webhooks/mock`.
-- [ ] Deshabilitar `/dev/mock-payment/:reference` en producción.
-- [ ] Conectar actualización de estado con Supabase Realtime o polling controlado.
-- [ ] Ejecutar `npm install`, `npm run test` y `npm run build`.
+- [x] Instalar dependencias y configurar scripts `test` y `build`.
+- [x] Crear migraciones y políticas RLS.
+- [x] Implementar autenticación y autorización por rol (`ADMIN`, `CASHIER`).
+- [x] Implementar servicio de pagos y adaptador mock.
+- [x] Implementar endpoints de cobro, efectivo, consulta y `/api/webhooks/mock`.
+- [x] Deshabilitar `/dev/mock-payment/:reference` en producción.
+- [x] Conectar actualización de estado con Supabase Realtime y polling controlado.
+- [x] Ejecutar `npm install`, `npm test` y `npm run build`.
 
 ### Fase 2 — Taypi
 
-- [ ] Confirmar documentación y contrato vigente de Taypi antes de activar credenciales.
-- [ ] Implementar creación de checkout/QR, expiración y consulta en `TaypiProvider`.
-- [ ] Implementar verificación HMAC y normalización de estados.
-- [ ] Probar sandbox con reintentos y webhooks duplicados.
-- [ ] Activar mediante `PAYMENT_PROVIDER=taypi`, sin cambios en UI ni servicio de dominio.
+- [x] Confirmar documentación y contrato vigente de Taypi antes de activar credenciales.
+- [x] Implementar creación de checkout/QR, expiración y consulta en `TaypiProvider`.
+- [x] Implementar verificación HMAC y normalización de estados.
+- [ ] Probar sandbox con reintentos y webhooks duplicados usando una cuenta Taypi.
+- [x] Activar mediante `PAYMENT_PROVIDER=taypi`, sin cambios en UI ni servicio de dominio.
+- [x] Añadir reconciliación server-side por polling como respaldo del webhook.
 
 ### Fase 3 — Operación y reportes
 

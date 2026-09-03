@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { PaymentListFilters, PaymentRepository } from './PaymentRepository';
-import type { Payment, PaymentEvent } from '../payments/types';
+import type { Payment, PaymentEvent, PaymentStatus } from '../payments/types';
 
 /** Deterministic repository used by local mock mode and unit tests. */
 export class InMemoryPaymentRepository implements PaymentRepository {
@@ -40,6 +40,7 @@ export class InMemoryPaymentRepository implements PaymentRepository {
     const to = filters.to ? new Date(filters.to).getTime() : Number.POSITIVE_INFINITY;
     const values = [...this.payments.values()]
       .filter((payment) => !filters.status || payment.status === filters.status)
+      .filter((payment) => !filters.method || (filters.method === 'CASH' ? payment.provider === 'CASH' : payment.provider !== 'CASH'))
       .filter((payment) => !filters.provider || payment.provider === filters.provider)
       .filter((payment) => !filters.createdBy || payment.createdBy === filters.createdBy)
       .filter((payment) => { const time = new Date(payment.createdAt).getTime(); return time >= from && time <= to; })
@@ -77,6 +78,7 @@ export class InMemoryPaymentRepository implements PaymentRepository {
     amountCents: number;
     currency: string;
     providerEventId: string;
+    newStatus: PaymentStatus;
     payload: unknown;
     eventType: string;
     paidAt: string;
@@ -89,10 +91,16 @@ export class InMemoryPaymentRepository implements PaymentRepository {
       if (payment.status !== 'PENDING') return { payment: structuredClone(payment), event: null, changed: false };
       const event: PaymentEvent = {
         id: randomUUID(), paymentId: payment.id, eventType: input.eventType,
-        previousStatus: payment.status, newStatus: 'PAID', provider: input.provider,
+        previousStatus: payment.status, newStatus: input.newStatus, provider: input.provider,
         providerEventId: input.providerEventId, rawPayload: structuredClone(input.payload), createdAt: input.paidAt,
       };
-      const next = { ...payment, status: 'PAID' as const, paidAt: input.paidAt, provider: input.provider };
+      const next: Payment = {
+        ...payment,
+        status: input.newStatus,
+        paidAt: input.newStatus === 'PAID' ? input.paidAt : null,
+        cancelledAt: input.newStatus === 'CANCELLED' ? input.paidAt : payment.cancelledAt,
+        provider: input.provider,
+      };
       this.payments.set(payment.id, next);
       this.events.set(event.id, event);
       this.eventIds.set(event.providerEventId, event);

@@ -21,6 +21,8 @@ export class SupabasePaymentRepository implements PaymentRepository {
   async list(filters: PaymentListFilters = {}): Promise<Payment[]> {
     let query = this.client.from('payments').select('*').order('created_at', { ascending: false });
     if (filters.status) query = query.eq('status', filters.status);
+    if (filters.method === 'CASH') query = query.eq('provider', 'CASH');
+    if (filters.method === 'DIGITAL') query = query.neq('provider', 'CASH');
     if (filters.provider) query = query.eq('provider', filters.provider);
     if (filters.createdBy) query = query.eq('created_by', filters.createdBy);
     if (filters.from) query = query.gte('created_at', filters.from);
@@ -44,7 +46,7 @@ export class SupabasePaymentRepository implements PaymentRepository {
   }
 
   async markPaidFromWebhook(input: {
-    paymentId: string; provider: string; amountCents: number; currency: string; providerEventId: string; payload: unknown; eventType: string; paidAt: string;
+    paymentId: string; provider: string; amountCents: number; currency: string; providerEventId: string; newStatus: PaymentStatus; payload: unknown; eventType: string; paidAt: string;
   }): Promise<{ payment: Payment; event: PaymentEvent | null; changed: boolean }> {
     const current = await this.findById(input.paymentId);
     if (!current) throw new Error('Payment not found');
@@ -56,6 +58,7 @@ export class SupabasePaymentRepository implements PaymentRepository {
       p_currency: input.currency,
       p_provider_event_id: input.providerEventId,
       p_event_type: input.eventType,
+      p_new_status: input.newStatus,
       p_raw_payload: input.payload,
     });
     if (error) throw error;

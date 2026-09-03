@@ -1,7 +1,8 @@
-import type { Payment, PaymentEvent, PaymentStatus } from '../payments/types';
+import type { Payment, PaymentEvent, PaymentMethod, PaymentStatus } from '../payments/types';
 
 export interface PaymentListFilters {
   status?: PaymentStatus;
+  method?: PaymentMethod;
   provider?: string;
   createdBy?: string;
   from?: string;
@@ -24,6 +25,7 @@ export interface PaymentRepository {
     amountCents: number;
     currency: string;
     providerEventId: string;
+    newStatus: PaymentStatus;
     payload: unknown;
     eventType: string;
     paidAt: string;

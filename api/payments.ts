@@ -13,7 +13,7 @@ import {
   type ApiRequest,
   type ApiResponse,
 } from './_shared';
-import { PaymentService, type PaymentStatus } from '../src/server';
+import { PaymentService, type PaymentMethod, type PaymentStatus } from '../src/server';
 
 const STATUSES: PaymentStatus[] = ['PENDING', 'PAID', 'FAILED', 'EXPIRED', 'CANCELLED'];
 export const config = { api: { bodyParser: { sizeLimit: '64kb' } } };
@@ -66,6 +66,7 @@ function parseFilters(query: ApiRequest['query'], role: 'ADMIN' | 'CASHIER') {
   if (!Number.isInteger(limit) || limit < 1 || limit > 200) throw new HttpError(400, 'limit must be between 1 and 200');
   return {
     ...(status ? { status: status as PaymentStatus } : {}),
+    ...(method ? { method: method as PaymentMethod } : {}),
     ...(method === 'CASH' ? { provider: 'CASH' } : provider ? { provider: provider.toUpperCase() === 'CASH' ? 'CASH' : provider.toLowerCase() } : {}),
     ...(createdBy ? { createdBy } : {}),
     ...(from ? { from } : {}),

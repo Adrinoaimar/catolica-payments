@@ -47,6 +47,13 @@ export interface CreatePaymentInput {
 
 export interface ProviderPayment {
   providerPaymentId: string;
+  /** Normalized provider state returned by getPayment for reconciliation. */
+  status?: PaymentStatus;
+  amountCents?: number;
+  currency?: string;
+  reference?: string;
+  eventId?: string;
+  paidAt?: string;
   checkoutUrl?: string;
   /** Opaque checkout token used by providers such as TAYPI. */
   checkoutToken?: string;

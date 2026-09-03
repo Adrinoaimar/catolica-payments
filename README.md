@@ -50,7 +50,7 @@ npm run build
 
 ## Variables de entorno
 
-Consulte [.env.example](.env.example). `PAYMENT_PROVIDER=mock` es la configuración segura para desarrollo. `VITE_DEMO_MODE=true` habilita explícitamente el flujo offline local y solo tiene efecto en builds no productivos; sin esa bandera, la app falla cerrado si Supabase no está configurado y nunca crea sesiones falsas ni recupera pagos desde `localStorage`. Las claves `SUPABASE_SERVICE_ROLE_KEY` y de proveedores solo deben existir en el backend/serverless; nunca deben exponerse como variables `VITE_*` ni enviarse al navegador.
+Consulte [.env.example](.env.example). `PAYMENT_PROVIDER=mock` es la configuración segura para desarrollo. `VITE_DEMO_MODE=true` habilita explícitamente el flujo offline local y solo tiene efecto en builds no productivos; sin esa bandera, la app falla cerrado si Supabase no está configurado y nunca crea sesiones falsas ni recupera pagos desde `localStorage`. `CRON_SECRET` protege la reconciliación programada. Las claves `SUPABASE_SERVICE_ROLE_KEY`, `CRON_SECRET` y de proveedores solo deben existir en el backend/serverless; nunca deben exponerse como variables `VITE_*` ni enviarse al navegador.
 
 ## Probar el flujo mock
 
@@ -78,6 +78,14 @@ POST /api/webhooks/culqi
 ```
 
 Cada adaptador debe autenticar el evento, buscar la referencia, comparar monto y moneda, validar `provider_payment_id`, rechazar duplicados de forma idempotente y registrar `payment_events` dentro de una operación atómica. Responda rápido con HTTP 200 solo después de aceptar el evento; eventos inválidos deben rechazarse con el código apropiado sin modificar pagos.
+
+### Alternativa cuando el webhook se retrasa
+
+El webhook del proveedor es el camino principal. Como respaldo, `GET /api/cron/reconcile-payments` consulta server-side el estado de cada operación `PENDING` mediante `getPayment`, vuelve a validar proveedor, referencia, monto, moneda y estado, y usa la misma transición RPC idempotente. La pantalla abierta también puede llamar `POST /api/payments/:reference/reconcile`, que reconcilia una sola operación con la sesión del cajero. Ninguna ruta acepta una confirmación desde el navegador. El cron se protege con `Authorization: Bearer <CRON_SECRET>` y `vercel.json` lo programa cada cinco minutos; en Vercel Hobby esa frecuencia no está disponible, por lo que debe invocarse desde Supabase Cron/`pg_cron` o un scheduler externo con `CRON_SECRET`. Vercel documenta que el secreto se entrega en el header de la invocación y que Hobby limita la frecuencia a una vez al día. [Vercel Cron](https://vercel.com/docs/cron-jobs/manage-cron-jobs)
+
+TAYPI también reintenta webhooks y permite reenvío manual desde su panel. La reconciliación por `GET /api/v1/payments/:payment_id` es una red de seguridad, no reemplaza la firma HMAC ni la auditoría. [SDK JavaScript de TAYPI](https://docs.taypi.pe/sdks/javascript), [Webhooks de TAYPI](https://docs.taypi.pe/webhooks)
+
+Alternativas evaluadas: reenvío/reintentos nativos de TAYPI, polling server-side (implementado), Supabase Cron/`pg_cron` llamando esta ruta, y Supabase Queues para una futura cola durable. Supabase Realtime queda reservado para refrescar la interfaz; `onSuccess` de un checkout o cualquier señal del navegador no confirma dinero. Referencias: [Supabase Cron](https://supabase.com/docs/guides/cron), [Supabase Queues](https://supabase.com/docs/guides/queues).
 
 ## Activar Taypi
 
@@ -109,7 +117,7 @@ Antes de procesar dinero real, complete la verificación KYB de la cuenta de TAY
 1. Cree un proyecto y habilite Email/Password o el proveedor de Auth seleccionado.
 2. Ejecute las migraciones en `supabase/migrations/`.
 3. Asigne roles mediante el mecanismo definido por las migraciones (`ADMIN` o `CASHIER`).
-4. Configure Realtime para `payments` si la interfaz lo utiliza.
+4. Ejecute también `20260902000002_realtime_payment_updates.sql`; crea la proyección mínima `payment_updates`, su trigger y la publicación `supabase_realtime` sin transmitir `provider_data`.
 5. Verifique RLS con ambos roles antes de publicar.
 
 El navegador usa únicamente la URL y anon key. La service-role key se reserva para funciones serverless y tareas administrativas.
@@ -119,9 +127,10 @@ El navegador usa únicamente la URL y anon key. La service-role key se reserva p
 1. Suba el repositorio a GitHub.
 2. En Vercel, importe el repositorio y seleccione el framework detectado por el proyecto.
 3. Configure las variables de entorno por ambiente (Preview y Production).
-4. Mantenga `PAYMENT_PROVIDER=mock` en Preview hasta validar el sandbox.
+4. Mantenga `PAYMENT_PROVIDER=mock` y `VITE_DEMO_MODE=true` solo en un entorno local de desarrollo; los builds de Vercel nunca deben usar el simulador.
 5. Configure las URLs de webhook del proveedor hacia el dominio de producción.
-6. Proteja Production con claves reales solo después de revisar logs y pruebas.
+6. Configure `CRON_SECRET` y confirme que el cron de reconciliación tiene permiso para consultar el proveedor.
+7. Proteja Production con claves reales solo después de revisar logs y pruebas.
 
 Cada push a `main` puede generar el despliegue de producción mediante la integración oficial GitHub-Vercel. No use GitHub Pages para secretos, funciones serverless o webhooks.
 

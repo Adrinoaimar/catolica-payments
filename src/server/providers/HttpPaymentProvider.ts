@@ -1,4 +1,5 @@
 import type { CreatePaymentInput, ProviderPayment, VerifiedWebhook, WebhookRequest } from '../payments/types';
+import { solesToCents } from '../payments/money';
 import { header, verifyHmacSha256 } from '../utils/signature';
 import { ProviderError, type PaymentProvider } from './PaymentProvider';
 
@@ -34,6 +35,12 @@ export abstract class HttpPaymentProvider implements PaymentProvider {
     if (!providerPaymentId) throw new ProviderError(`${this.name} response missing payment ID`);
     return {
       providerPaymentId,
+      status: providerStatus(data.status ?? data.payment_status),
+      amountCents: data.amount_cents !== undefined ? providerCents(data.amount_cents) : providerAmount(data.amount),
+      currency: providerString(data.currency) || input.currency || 'PEN',
+      reference: providerString(data.reference ?? data.external_reference) || input.reference,
+      eventId: providerString(data.event_id ?? data.payment_event_id),
+      paidAt: providerString(data.paid_at),
       checkoutUrl: typeof data.checkout_url === 'string' ? data.checkout_url : undefined,
       checkoutToken: typeof data.checkout_token === 'string' ? data.checkout_token : undefined,
       qrCode: typeof data.qr_code === 'string' ? data.qr_code : undefined,
@@ -46,8 +53,15 @@ export abstract class HttpPaymentProvider implements PaymentProvider {
   async getPayment(providerPaymentId: string): Promise<ProviderPayment> {
     const data = await this.request(`/payments/${encodeURIComponent(providerPaymentId)}`, { method: 'GET' });
     const body = data as Record<string, unknown>;
+    const normalizedId = String(body.provider_payment_id ?? body.id ?? providerPaymentId);
     return {
-      providerPaymentId: String(body.provider_payment_id ?? body.id ?? providerPaymentId),
+      providerPaymentId: normalizedId,
+      status: providerStatus(body.status ?? body.payment_status),
+      amountCents: body.amount_cents !== undefined ? providerCents(body.amount_cents) : providerAmount(body.amount),
+      currency: providerString(body.currency) || undefined,
+      reference: providerString(body.reference ?? body.external_reference) || undefined,
+      eventId: providerString(body.event_id ?? body.payment_event_id),
+      paidAt: providerString(body.paid_at),
       checkoutUrl: typeof body.checkout_url === 'string' ? body.checkout_url : undefined,
       checkoutToken: typeof body.checkout_token === 'string' ? body.checkout_token : undefined,
       qrCode: typeof body.qr_code === 'string' ? body.qr_code : undefined,
@@ -106,6 +120,33 @@ export abstract class HttpPaymentProvider implements PaymentProvider {
     if (!response.ok) throw new ProviderError(`${this.name} API error`, response.status, 'PROVIDER_HTTP_ERROR');
     return data;
   }
+}
+
+function providerString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function providerAmount(value: unknown): number | undefined {
+  if (typeof value !== 'string' && typeof value !== 'number') return undefined;
+  try { return solesToCents(String(value)); } catch { return undefined; }
+}
+
+function providerCents(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+    ? value
+    : typeof value === 'string' && /^[1-9]\d*$/.test(value) && Number.isSafeInteger(Number(value))
+      ? Number(value) : undefined;
+}
+
+function providerStatus(value: unknown): ProviderPayment['status'] {
+  const status = providerString(value).toUpperCase();
+  if (status === 'COMPLETED' || status === 'SUCCESS' || status === 'SUCCEEDED') return 'PAID';
+  if (status === 'PAID') return 'PAID';
+  if (status === 'FAILED' || status === 'REJECTED') return 'FAILED';
+  if (status === 'EXPIRED') return 'EXPIRED';
+  if (status === 'CANCELLED' || status === 'CANCELED') return 'CANCELLED';
+  if (status === 'PENDING' || status === 'PROCESSING' || status === 'IN_PROGRESS') return 'PENDING';
+  return undefined;
 }
 
 export class CulqiProvider extends HttpPaymentProvider {

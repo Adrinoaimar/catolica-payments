@@ -149,7 +149,9 @@ Respuestas no deben incluir secretos ni payloads sensibles. Errores de validaci�
 
 ## Realtime y experiencia
 
-La pantalla de cobro se suscribe a cambios de su `payment.id`/`reference`, con polling de respaldo y límite de tiempo. Realtime solo informa al cliente; nunca autoriza una transición. Al observar `PAID`, la UI muestra monto, referencia, hora y confirmación sonora opcional, luego permite **Nuevo cobro**.
+La interfaz se suscribe con el cliente anon autenticado a la proyección `payment_updates`, no a `payments`: el trigger publica únicamente `id`, `reference` y `changed_at`, evitando transmitir `provider_data`. Cada evento invalida la vista y el navegador rehidrata el registro mediante `GET /api/payments/:reference` con Bearer. Al reconectar, se repite un GET completo para recuperar eventos perdidos. Realtime solo informa al cliente; nunca autoriza una transición. La pantalla de cobro mantiene polling HTTP de respaldo y al observar `PAID` muestra monto, referencia y confirmación.
+
+Si el webhook del proveedor se retrasa, `api/cron/reconcile-payments.ts` consulta el estado server-side y aplica la misma transición atómica después de validar identidad, importe, moneda y estado. La pantalla puede solicitar la misma reconciliación para una sola referencia mediante `POST /api/payments/:reference/reconcile`. Es una red de seguridad; el webhook firmado sigue siendo el camino principal y el frontend nunca puede marcar un pago.
 
 Dashboard agrega por `amount_cents` y separa `provider=CASH` de pagos digitales. Conversión a soles ocurre únicamente en la capa de presentación/exportación.
 

@@ -192,14 +192,31 @@ export class TaypiProvider implements PaymentProvider {
     const qrImage = normalizeQrImage(data.qr_image ?? data.qr_code);
     const checkoutUrl = stringValue(data.checkout_url) || undefined;
     const expiresAt = stringValue(data.expires_at) || fallbackExpiresAt;
+    const rawStatus = stringValue(data.status).toLowerCase();
+    const status = mapPaymentStatus(rawStatus, stringValue(data.event));
+    const amountCents = parseTaypiAmount(data.amount);
+    const currency = stringValue(data.currency).toUpperCase() || undefined;
+    const reference = stringValue(data.reference) || undefined;
     return {
       providerPaymentId,
+      status,
+      amountCents: amountCents ?? undefined,
+      currency,
+      reference,
+      eventId: stringValue(data.event_id) || undefined,
+      paidAt: stringValue(data.paid_at) || undefined,
       checkoutUrl,
       qrCode: qrImage,
       expiresAt,
       providerData: data,
     };
   }
+}
+
+function mapPaymentStatus(status: string, eventType: string): ProviderPayment['status'] {
+  const candidate = status || eventType.replace(/^payment\./, '').toLowerCase();
+  if (candidate === 'pending' || candidate === 'processing' || candidate === 'in_progress') return 'PENDING';
+  return mapWebhookStatus(candidate, eventType) ?? undefined;
 }
 
 function resolveBaseUrl(configuredUrl: string | undefined, publicKey: string, sandbox = false): string {

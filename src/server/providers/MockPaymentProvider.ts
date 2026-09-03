@@ -21,6 +21,9 @@ export class MockPaymentProvider implements PaymentProvider {
     // SVG keeps local mode dependency-free. Production provider returns real QR payload.
     const qrCode = `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="640" height="640" viewBox="0 0 640 640"><rect width="640" height="640" fill="white"/><rect x="26" y="26" width="588" height="588" fill="none" stroke="#102a43" stroke-width="8"/><text x="320" y="290" text-anchor="middle" font-family="sans-serif" font-weight="700" font-size="34" fill="#102a43">MOCK QR</text><text x="320" y="345" text-anchor="middle" font-family="monospace" font-size="24" fill="#102a43">${input.reference}</text><text x="320" y="390" text-anchor="middle" font-family="sans-serif" font-size="24" fill="#334e68">S/ ${(input.amountCents / 100).toFixed(2)}</text></svg>`)}`;
     const record: MockRecord = { providerPaymentId, checkoutUrl: destination, qrCode, expiresAt, providerData: { destination }, input, status: 'PENDING' };
+    record.amountCents = input.amountCents;
+    record.currency = input.currency ?? 'PEN';
+    record.reference = input.reference;
     this.records.set(providerPaymentId, record);
     return this.publicRecord(record);
   }
@@ -62,15 +65,17 @@ export class MockPaymentProvider implements PaymentProvider {
     const record = this.records.get(providerPaymentId);
     if (!record) throw new ProviderError('Mock payment not found', 404, 'NOT_FOUND');
     record.status = 'PAID';
+    const eventId = `mock_evt_${randomUUID()}`;
+    record.eventId = eventId;
     return JSON.stringify({
-      event_id: `mock_evt_${randomUUID()}`, event_type: 'payment.paid', status: 'PAID',
+      event_id: eventId, event_type: 'payment.paid', status: 'PAID',
       provider_payment_id: record.providerPaymentId, reference: record.input.reference,
       amount_cents: record.input.amountCents, currency: record.input.currency ?? 'PEN',
     });
   }
 
   private publicRecord(record: MockRecord): ProviderPayment {
-    const { input: _input, status: _status, ...publicValue } = record;
+    const { input: _input, ...publicValue } = record;
     return publicValue;
   }
 }

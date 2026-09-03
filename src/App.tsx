@@ -10,6 +10,7 @@ import { formatSoles } from './lib/format'
 import type { Payment, SessionUser } from './types'
 import { AuthProvider, useAuth } from './lib/auth'
 import { isDemoMode } from './lib/supabase'
+import { fetchPublicPayment, subscribeToPayments } from './lib/realtime'
 import './styles.css'
 
 function App() {
@@ -35,6 +36,46 @@ function App() {
     })
     return () => { active = false }
   }, [user])
+  useEffect(() => {
+    if (!user || isDemoMode) return
+    let active = true
+    const unsubscribe = subscribeToPayments({
+      userId: user.id,
+      onChange: (change) => {
+        if (!active) return
+        if (change.event === 'DELETE') {
+          setPayments((current) => current.filter((item) => item.id !== change.id && item.reference !== change.reference))
+          setActivePayment((current) => current && (current.id === change.id || current.reference === change.reference) ? null : current)
+          return
+        }
+        if (!change.reference) return
+        void fetchPublicPayment(change.reference).then((next) => {
+          if (!active) return
+          setPayments((current) => upsertPayment(current, next))
+          setActivePayment((current) => current && current.reference === next.reference ? { ...next, createdBy: current.createdBy || next.createdBy } : current)
+        }).catch(() => {
+          // The API polling path remains authoritative if a transient stream
+          // event races the transaction's read replica.
+        })
+      },
+      onStatus: (status, error) => {
+        if (!active) return
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          setLedgerError(error?.message || 'Actualización en tiempo real no disponible. Se reintentará automáticamente.')
+        } else if (status === 'SUBSCRIBED') {
+          setLedgerError((current) => current?.startsWith('Actualización en tiempo real') ? null : current)
+          // Reconcile after every reconnect. Realtime does not replay rows
+          // missed while the browser was offline.
+          void listPayments().then((next) => {
+            if (!active) return
+            setPayments(next)
+            setActivePayment((current) => current ? next.find((item) => item.reference === current.reference) ?? current : current)
+          }).catch(() => { /* current snapshot remains until next event */ })
+        }
+      },
+    })
+    return () => { active = false; unsubscribe() }
+  }, [user])
   const paidPayment = (payment: Payment) => { setActivePayment(payment); setPayments((current) => { const next = current.map((item) => item.id === payment.id || item.reference === payment.reference ? payment : item); savePayments(next); return next }) }
   const simulatorReference = isDemoMode ? path.match(/^\/dev\/mock-payment\/([^/]+)/)?.[1] : undefined
   if (simulatorReference) return <MockSimulator reference={decodeURIComponent(simulatorReference)} payments={payments} onComplete={(payment) => { paidPayment(payment); window.history.pushState({}, '', '/'); setPath('/') }} />
@@ -47,6 +88,14 @@ function App() {
 
   return <div className="app-shell"><Sidebar user={user} section={section} onNavigate={(next) => { setSection(next); setActivePayment(null) }} onLogout={logout} open={mobileMenu} onClose={() => setMobileMenu(false)} />
     <div className="main-shell"><header className="topbar"><button className="mobile-menu" aria-label="Abrir menú" onClick={() => setMobileMenu(true)}><MenuIcon size={22} /></button><div className="topbar-title"><span className="topbar-kicker">GRUPO LA CATÓLICA</span><span className="topbar-context">/ {activePayment ? 'Cobro digital' : section === 'cashier' ? 'Punto de cobro' : section === 'dashboard' ? 'Resumen general' : section === 'operations' ? 'Operaciones' : 'Reportes'}</span></div><div className="topbar-actions"><button className="icon-button topbar-search" aria-label="Buscar"><SearchIcon size={19} /></button><span className="topbar-divider" /><span className="avatar">{user.initials}</span><span className="topbar-user"><strong>{user.name}</strong><small>{user.role === 'ADMIN' ? 'Administrador' : 'Cajero'}</small></span></div></header><main className="content-shell">{ledgerError && <div className="form-error" role="alert"><InfoIcon size={16} /> {ledgerError}</div>}{activePayment ? <PaymentPage payment={activePayment} onPaid={paidPayment} onNew={newCharge} demoMode={isDemoMode} onSimulator={(payment) => { const popup = window.open(`/dev/mock-payment/${payment.reference}`, '_blank', 'noopener,noreferrer'); if (!popup) { window.history.pushState({}, '', `/dev/mock-payment/${payment.reference}`); window.dispatchEvent(new PopStateEvent('popstate')) } }} /> : section === 'cashier' ? <CashierPage user={user} onCreated={create} /> : <BackOffice section={section} payments={payments} user={user} onNew={newCharge} />}</main></div></div>
+}
+
+function upsertPayment(current: Payment[], next: Payment): Payment[] {
+  const index = current.findIndex((item) => item.id === next.id || item.reference === next.reference)
+  if (index < 0) return [next, ...current]
+  const previous = current[index]
+  const merged = { ...next, createdBy: previous.createdBy || next.createdBy }
+  return current.map((item, itemIndex) => itemIndex === index ? merged : item)
 }
 
 function MockSimulator({ reference, payments, onComplete }: { reference: string; payments: Payment[]; onComplete: (payment: Payment) => void }) {

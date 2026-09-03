@@ -10,6 +10,9 @@ grant execute on function public.current_app_role() to authenticated, service_ro
 -- insert or alter payment rows directly.
 drop policy if exists payments_cashier_insert on public.payments;
 
+-- Replace the initial PAID-only overload with the terminal-status-aware RPC.
+drop function if exists public.apply_payment_webhook(text, text, text, integer, text, text, text, jsonb);
+
 create or replace function public.apply_payment_webhook(
   p_provider text,
   p_provider_payment_id text,
@@ -18,7 +21,8 @@ create or replace function public.apply_payment_webhook(
   p_currency text,
   p_provider_event_id text,
   p_event_type text,
-  p_raw_payload jsonb
+  p_raw_payload jsonb,
+  p_new_status text
 )
 returns jsonb
 language plpgsql
@@ -34,8 +38,11 @@ begin
      or nullif(trim(p_reference), '') is null
      or nullif(trim(p_provider_event_id), '') is null
      or nullif(trim(p_event_type), '') is null
-     or p_amount_cents is null or p_amount_cents <= 0 or p_currency <> 'PEN' then
+     or p_amount_cents is null or p_amount_cents <= 0 or p_currency is distinct from 'PEN' then
     raise exception 'invalid payment webhook' using errcode = '22023';
+  end if;
+  if p_new_status is null or p_new_status not in ('PAID', 'FAILED', 'EXPIRED', 'CANCELLED') then
+    raise exception 'invalid payment webhook status' using errcode = '22023';
   end if;
 
   -- Existing provider event is a successful no-op. The unique constraint also
@@ -59,14 +66,16 @@ begin
   end if;
 
   update public.payments
-    set status = 'PAID', paid_at = now()
+    set status = p_new_status,
+        paid_at = case when p_new_status = 'PAID' then now() else null end,
+        cancelled_at = case when p_new_status = 'CANCELLED' then now() else null end
     where id = payment_row.id
     returning * into payment_row;
   insert into public.payment_events(
     payment_id, event_type, previous_status, new_status, provider,
     provider_event_id, raw_payload
   ) values (
-    payment_row.id, p_event_type, 'PENDING', 'PAID', p_provider,
+    payment_row.id, p_event_type, 'PENDING', p_new_status, p_provider,
     p_provider_event_id, coalesce(p_raw_payload, '{}'::jsonb)
   ) returning * into event_row;
   return jsonb_build_object('changed', true, 'duplicate', false, 'payment', to_jsonb(payment_row), 'event', to_jsonb(event_row));
@@ -167,5 +176,5 @@ revoke all on function public.expire_payment(uuid, timestamptz) from public, ano
 grant execute on function public.expire_payment(uuid, timestamptz) to service_role;
 revoke all on function public.record_cash_payment(uuid, text, integer, uuid, timestamptz, timestamptz, jsonb, uuid, text, timestamptz) from public, anon, authenticated;
 grant execute on function public.record_cash_payment(uuid, text, integer, uuid, timestamptz, timestamptz, jsonb, uuid, text, timestamptz) to service_role;
-revoke all on function public.apply_payment_webhook(text, text, text, integer, text, text, text, jsonb) from public, anon, authenticated;
-grant execute on function public.apply_payment_webhook(text, text, text, integer, text, text, text, jsonb) to service_role;
+revoke all on function public.apply_payment_webhook(text, text, text, integer, text, text, text, jsonb, text) from public, anon, authenticated;
+grant execute on function public.apply_payment_webhook(text, text, text, integer, text, text, text, jsonb, text) to service_role;
