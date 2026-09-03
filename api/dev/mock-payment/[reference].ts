@@ -4,7 +4,7 @@ import { serverClient, type ApiRequest, type ApiResponse } from '../../_shared';
 
 /** Development-only simulator. It routes through identical webhook validation/transition code. */
 export default async function handler(request: ApiRequest & { query?: Record<string, string | string[] | undefined> }, response: ApiResponse): Promise<void> {
-  if (process.env.NODE_ENV === 'production') { response.status(404).json({ error: 'Not found' }); return; }
+  if (isProduction()) { response.status(404).json({ error: 'Not found' }); return; }
   if (request.method !== 'POST') { response.status(405).json({ error: 'Method not allowed' }); return; }
   try {
     const reference = String(request.query?.reference ?? '');
@@ -22,4 +22,8 @@ export default async function handler(request: ApiRequest & { query?: Record<str
     const result = await handleWebhook({ rawBody, headers: {} }, provider, service);
     response.status(result.status).json(result.body);
   } catch { response.status(500).json({ error: 'Mock payment could not be processed' }); }
+}
+
+function isProduction(): boolean {
+  return process.env.NODE_ENV === 'production' || process.env.VERCEL_ENV === 'production';
 }
