@@ -97,4 +97,15 @@ describe('reconciliation cron authentication', () => {
       CULQI_WEBHOOK_SECRET: 'webhook',
     })).toThrow('adapter is not implemented');
   });
+
+  it('rejects Taypi sandbox configuration in production', () => {
+    expect(() => createPaymentProvider({
+      NODE_ENV: 'production',
+      PAYMENT_PROVIDER: 'taypi',
+      TAYPI_PUBLIC_KEY: 'taypi_pk_live_demo',
+      TAYPI_SECRET_KEY: 'taypi_sk_live_demo',
+      TAYPI_WEBHOOK_SECRET: 'webhook',
+      TAYPI_SANDBOX: 'true',
+    })).toThrow('not allowed in production');
+  });
 });

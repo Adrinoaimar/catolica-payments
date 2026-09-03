@@ -6,7 +6,9 @@ import { ProviderError, providerFromEnvironment } from './PaymentProvider';
 export function createPaymentProvider(env: Record<string, string | undefined> = process.env): PaymentProvider {
   switch (providerFromEnvironment(env)) {
     case 'mock': return new MockPaymentProvider();
-    case 'taypi': return new TaypiProvider({
+    case 'taypi':
+      assertLiveTaypiConfiguration(env);
+      return new TaypiProvider({
       baseUrl: env.TAYPI_API_URL,
       sandbox: env.TAYPI_SANDBOX === 'true',
       publicKey: requireValue(env.TAYPI_PUBLIC_KEY, 'TAYPI_PUBLIC_KEY'),
@@ -27,4 +29,19 @@ export function createPaymentProvider(env: Record<string, string | undefined> = 
 function requireValue(value: string | undefined, name: string): string {
   if (!value) throw new ProviderError(`Missing ${name}`, 500, 'PROVIDER_NOT_CONFIGURED');
   return value;
+}
+
+function assertLiveTaypiConfiguration(env: Record<string, string | undefined>): void {
+  if (!isProduction(env)) return;
+  if (env.TAYPI_SANDBOX?.trim().toLowerCase() === 'true') {
+    throw new ProviderError('TAYPI_SANDBOX is not allowed in production', 500, 'PROVIDER_NOT_CONFIGURED');
+  }
+  if (/^taypi_(?:pk|sk)_test_/i.test(env.TAYPI_PUBLIC_KEY?.trim() ?? '')
+    || /^taypi_(?:pk|sk)_test_/i.test(env.TAYPI_SECRET_KEY?.trim() ?? '')) {
+    throw new ProviderError('TAYPI test keys are not allowed in production', 500, 'PROVIDER_NOT_CONFIGURED');
+  }
+}
+
+function isProduction(env: Record<string, string | undefined>): boolean {
+  return env.NODE_ENV === 'production' || env.VERCEL_ENV === 'production';
 }
