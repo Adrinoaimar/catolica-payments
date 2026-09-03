@@ -3,18 +3,34 @@ import { ArrowIcon, CheckIcon, InfoIcon } from '../components/Icons'
 import { BrandMark } from '../components/BrandMark'
 import type { SessionUser } from '../types'
 
-interface LoginPageProps { onLogin: (user: SessionUser) => void }
+interface LoginPageProps {
+  onLogin: (email: string, password: string) => Promise<SessionUser>
+  authError?: string | null
+  demoMode?: boolean
+  onResetPassword?: (email: string) => Promise<void>
+}
 
-export function LoginPage({ onLogin }: LoginPageProps) {
+export function LoginPage({ onLogin, authError, demoMode = false, onResetPassword }: LoginPageProps) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
 
-  function handleSubmit(event: React.FormEvent) {
+  async function handleSubmit(event: React.FormEvent) {
     event.preventDefault()
     if (!email || !password) { setError('Ingresa tu correo y contraseña para continuar.'); return }
-    onLogin({ id: 'cashier-demo', name: email.split('@')[0] ? email.split('@')[0].replace(/[._]/g, ' ').replace(/\b\w/g, (match) => match.toUpperCase()) : 'María González', email, role: email.includes('admin') ? 'ADMIN' : 'CASHIER', initials: (email.split('@')[0] || 'mg').split(/[._]/).map((part) => part[0]).join('').slice(0, 2).toUpperCase() })
+    setBusy(true)
+    setError('')
+    try { await onLogin(email, password) } catch (reason) { setError(reason instanceof Error ? reason.message : 'No se pudo iniciar sesión.') }
+    finally { setBusy(false) }
+  }
+
+  async function handleResetPassword() {
+    if (!onResetPassword) { setError('Solicita el restablecimiento de contraseña al administrador.'); return }
+    if (!email) { setError('Ingresa tu correo electrónico para recuperar tu contraseña.'); return }
+    try { await onResetPassword(email); setError('Si el correo está registrado, recibirás instrucciones para restablecer tu contraseña.') }
+    catch (reason) { setError(reason instanceof Error ? reason.message : 'No se pudo enviar el correo de recuperación.') }
   }
 
   return (
@@ -43,12 +59,12 @@ export function LoginPage({ onLogin }: LoginPageProps) {
           <form className="login-form" onSubmit={handleSubmit}>
             <label htmlFor="email">Correo electrónico<input id="email" type="email" autoComplete="email" placeholder="nombre@grupolacatolica.edu.pe" value={email} onChange={(event) => { setEmail(event.target.value); setError('') }} /></label>
             <label htmlFor="password">Contraseña<div className="password-wrap"><input id="password" type={showPassword ? 'text' : 'password'} autoComplete="current-password" placeholder="Ingresa tu contraseña" value={password} onChange={(event) => { setPassword(event.target.value); setError('') }} /><button type="button" className="password-toggle" onClick={() => setShowPassword((value) => !value)} aria-label={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}>{showPassword ? 'Ocultar' : 'Mostrar'}</button></div></label>
-            <div className="login-form-meta"><label className="remember-check"><input type="checkbox" defaultChecked /><span>Recordarme</span></label><button className="text-button" type="button">¿Olvidaste tu contraseña?</button></div>
-            {error && <div className="form-error"><InfoIcon size={16} /> {error}</div>}
-            <button className="primary-button primary-button--large" type="submit">Ingresar <ArrowIcon size={18} /></button>
+            <div className="login-form-meta"><label className="remember-check"><input type="checkbox" defaultChecked /><span>Recordarme</span></label><button className="text-button" type="button" onClick={handleResetPassword}>¿Olvidaste tu contraseña?</button></div>
+            {(error || authError) && <div className="form-error"><InfoIcon size={16} /> {error || authError}</div>}
+            <button className="primary-button primary-button--large" type="submit" disabled={busy}>{busy ? 'Validando…' : <>Ingresar <ArrowIcon size={18} /></>}</button>
           </form>
           <div className="login-help"><span>¿Necesitas ayuda?</span> <button className="text-button" type="button">Contactar a soporte</button></div>
-          <div className="demo-hint"><span className="demo-hint__dot" /><p><strong>Modo demo disponible</strong><small>Usa cualquier correo y contraseña para explorar.</small></p></div>
+          {demoMode && <div className="demo-hint"><span className="demo-hint__dot" /><p><strong>Modo demo disponible</strong><small>Usa cualquier correo y contraseña para explorar.</small></p></div>}
         </div>
       </section>
     </main>

@@ -14,6 +14,10 @@ export interface Payment {
   createdAt: string
   expiresAt?: string
   paidAt?: string
+  /** QR/checkout material returned by the configured payment provider. */
+  qrCode?: string
+  checkoutUrl?: string
+  checkoutToken?: string
 }
 
 export interface SessionUser {

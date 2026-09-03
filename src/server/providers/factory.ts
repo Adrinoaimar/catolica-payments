@@ -1,5 +1,6 @@
 import { MockPaymentProvider } from './MockPaymentProvider';
-import { CulqiProvider, MercadoPagoProvider, TaypiProvider } from './HttpPaymentProvider';
+import { CulqiProvider, MercadoPagoProvider } from './HttpPaymentProvider';
+import { TaypiProvider } from './TaypiProvider';
 import type { PaymentProvider } from './PaymentProvider';
 import { ProviderError, providerFromEnvironment } from './PaymentProvider';
 
@@ -7,7 +8,11 @@ export function createPaymentProvider(env: Record<string, string | undefined> = 
   switch (providerFromEnvironment(env)) {
     case 'mock': return new MockPaymentProvider();
     case 'taypi': return new TaypiProvider({
-      baseUrl: env.TAYPI_API_URL ?? 'https://api.taypi.net', apiKey: requireValue(env.TAYPI_SECRET_KEY, 'TAYPI_SECRET_KEY'), webhookSecret: requireValue(env.TAYPI_WEBHOOK_SECRET, 'TAYPI_WEBHOOK_SECRET'),
+      baseUrl: env.TAYPI_API_URL,
+      sandbox: env.TAYPI_SANDBOX === 'true',
+      publicKey: requireValue(env.TAYPI_PUBLIC_KEY, 'TAYPI_PUBLIC_KEY'),
+      secretKey: requireValue(env.TAYPI_SECRET_KEY, 'TAYPI_SECRET_KEY'),
+      webhookSecret: requireValue(env.TAYPI_WEBHOOK_SECRET, 'TAYPI_WEBHOOK_SECRET'),
     });
     case 'culqi': return new CulqiProvider({
       baseUrl: env.CULQI_API_URL ?? 'https://api.culqi.com', apiKey: requireValue(env.CULQI_SECRET_KEY, 'CULQI_SECRET_KEY'), webhookSecret: requireValue(env.CULQI_WEBHOOK_SECRET, 'CULQI_WEBHOOK_SECRET'),

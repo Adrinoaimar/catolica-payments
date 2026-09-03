@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { PaymentRepository } from './PaymentRepository';
+import type { PaymentListFilters, PaymentRepository } from './PaymentRepository';
 import type { Payment, PaymentEvent, PaymentStatus } from '../payments/types';
 
 type Row = Record<string, any>;
@@ -18,6 +18,19 @@ export class SupabasePaymentRepository implements PaymentRepository {
   async findByReference(reference: string): Promise<Payment | null> { return this.findOne('reference', reference); }
   async findByProviderPaymentId(providerPaymentId: string): Promise<Payment | null> { return this.findOne('provider_payment_id', providerPaymentId); }
 
+  async list(filters: PaymentListFilters = {}): Promise<Payment[]> {
+    let query = this.client.from('payments').select('*').order('created_at', { ascending: false });
+    if (filters.status) query = query.eq('status', filters.status);
+    if (filters.provider) query = query.eq('provider', filters.provider);
+    if (filters.createdBy) query = query.eq('created_by', filters.createdBy);
+    if (filters.from) query = query.gte('created_at', filters.from);
+    if (filters.to) query = query.lte('created_at', filters.to);
+    query = query.limit(filters.limit ?? 100);
+    const { data, error } = await query;
+    if (error) throw error;
+    return (data ?? []).map((row: Row) => this.fromRow(row));
+  }
+
   async findEventByProviderEventId(providerEventId: string): Promise<PaymentEvent | null> {
     const { data, error } = await this.client.from('payment_events').select('*').eq('provider_event_id', providerEventId).maybeSingle();
     if (error) throw error;
@@ -31,7 +44,7 @@ export class SupabasePaymentRepository implements PaymentRepository {
   }
 
   async markPaidFromWebhook(input: {
-    paymentId: string; provider: string; providerEventId: string; payload: unknown; eventType: string; paidAt: string;
+    paymentId: string; provider: string; amountCents: number; currency: string; providerEventId: string; payload: unknown; eventType: string; paidAt: string;
   }): Promise<{ payment: Payment; event: PaymentEvent | null; changed: boolean }> {
     const current = await this.findById(input.paymentId);
     if (!current) throw new Error('Payment not found');
@@ -39,8 +52,8 @@ export class SupabasePaymentRepository implements PaymentRepository {
       p_provider: input.provider,
       p_provider_payment_id: current.providerPaymentId,
       p_reference: current.reference,
-      p_amount_cents: current.amountCents,
-      p_currency: current.currency,
+      p_amount_cents: input.amountCents,
+      p_currency: input.currency,
       p_provider_event_id: input.providerEventId,
       p_event_type: input.eventType,
       p_raw_payload: input.payload,
@@ -52,26 +65,30 @@ export class SupabasePaymentRepository implements PaymentRepository {
   }
 
   async markExpired(paymentId: string, at: string): Promise<{ payment: Payment; event: PaymentEvent | null; changed: boolean }> {
-    const payment = await this.findById(paymentId);
-    if (!payment) throw new Error('Payment not found');
-    if (payment.status !== 'PENDING') return { payment, event: null, changed: false };
-    const { data, error } = await this.client.from('payments').update({ status: 'EXPIRED' }).eq('id', paymentId).eq('status', 'PENDING').select().single();
+    const { data, error } = await this.client.rpc('expire_payment', { p_payment_id: paymentId, p_at: at });
     if (error) throw error;
-    const next = this.fromRow(data);
-    const { data: eventRow, error: eventError } = await this.client.from('payment_events').insert({
-      payment_id: paymentId, event_type: 'payment.expired', previous_status: 'PENDING', new_status: 'EXPIRED', provider: payment.provider,
-      provider_event_id: `expiry:${paymentId}:${at}`, raw_payload: { reason: 'expires_at reached' }, created_at: at,
-    }).select().single();
-    if (eventError) throw eventError;
-    return { payment: next, event: this.eventFromRow(eventRow), changed: true };
+    const result = data as { changed: boolean; payment: Row; event?: Row } | null;
+    if (!result?.payment) throw new Error('Supabase RPC returned no payment');
+    return { payment: this.fromRow(result.payment), event: result.event ? this.eventFromRow(result.event) : null, changed: result.changed === true };
   }
 
   async insertCashPayment(payment: Payment, event: PaymentEvent): Promise<Payment> {
-    const { error: paymentError } = await this.client.from('payments').insert(this.toRow(payment));
-    if (paymentError) throw paymentError;
-    const { error: eventError } = await this.client.from('payment_events').insert(this.eventToRow(event));
-    if (eventError) throw eventError;
-    return payment;
+    const { data, error } = await this.client.rpc('record_cash_payment', {
+      p_id: payment.id,
+      p_reference: payment.reference,
+      p_amount_cents: payment.amountCents,
+      p_created_by: payment.createdBy,
+      p_created_at: payment.createdAt,
+      p_paid_at: payment.paidAt,
+      p_provider_data: payment.providerData,
+      p_event_id: event.id,
+      p_event_provider_id: event.providerEventId,
+      p_event_created_at: event.createdAt,
+    });
+    if (error) throw error;
+    const result = data as { payment?: Row } | null;
+    if (!result?.payment) throw new Error('Supabase RPC returned no cash payment');
+    return this.fromRow(result.payment);
   }
 
   private async findOne(column: string, value: string): Promise<Payment | null> {

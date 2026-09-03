@@ -1,47 +1,53 @@
-import { handleWebhook, PaymentService, SupabasePaymentRepository } from '../../src/server';
+import { handleWebhook, PaymentService, SupabasePaymentRepository, type Payment } from '../../src/server';
 import { MockPaymentProvider } from '../../src/server/providers/MockPaymentProvider';
-import { paymentContext, serverClient, type ApiRequest, type ApiResponse } from '../_shared';
+import {
+  HttpError,
+  paymentContext,
+  readRawBody,
+  publicPayment,
+  serverClient,
+  sendError,
+  type ApiRequest,
+  type ApiResponse,
+} from '../_shared';
 
-export const config = { api: { bodyParser: false } };
+export const config = { api: { bodyParser: false, sizeLimit: '256kb' } };
+const REAL_PROVIDERS = new Set(['taypi', 'culqi', 'mercadopago']);
 
-export default async function handler(request: ApiRequest & { query?: Record<string, string | string[] | undefined> }, response: ApiResponse): Promise<void> {
-  if (request.method !== 'POST') { response.status(405).json({ error: 'Method not allowed' }); return; }
-  const providerName = String(request.query?.provider ?? '');
+export default async function handler(request: ApiRequest & Partial<AsyncIterable<Uint8Array>>, response: ApiResponse): Promise<void> {
+  if (request.method !== 'POST') { response.status(405).json({ ok: false, error: 'Method not allowed' }); return; }
+  const providerName = singleQuery(request.query?.provider)?.toLowerCase() ?? '';
   try {
-    const body = await rawBody(request);
+    const body = await readRawBody(request);
     const context = paymentContextForWebhook(providerName);
     const result = await handleWebhook({ rawBody: body, headers: request.headers }, context.provider, context.service);
-    response.status(result.status).json(result.body);
-  } catch (error) { response.status(500).json({ ok: false, error: 'Webhook configuration error' }); }
+    const responseBody = result.body.payment && typeof result.body.payment === 'object'
+      ? { ...result.body, payment: publicPayment(result.body.payment as Payment) }
+      : result.body;
+    response.status(result.status).json(responseBody);
+  } catch (error) {
+    if (error instanceof HttpError) { response.status(error.statusCode).json({ ok: false, error: error.message }); return; }
+    sendError(response, error);
+  }
 }
 
 function paymentContextForWebhook(name: string) {
+  if (!name) throw new HttpError(404, 'Webhook provider is required');
   if (name === 'mock') {
-    // Mock endpoint is development-only and must not depend on per-process provider state.
-    const provider = new MockPaymentProvider({ allowUnknownWebhook: process.env.NODE_ENV !== 'production' });
-    const service = new PaymentService({ provider, repository: new SupabasePaymentRepository(serverClient()) });
+    if (process.env.NODE_ENV === 'production' || process.env.VERCEL_ENV === 'production') throw new HttpError(404, 'Not found');
+    const client = serverClient();
+    const provider = new MockPaymentProvider({ allowUnknownWebhook: true });
+    const service = new PaymentService({ provider, repository: new SupabasePaymentRepository(client) });
     return { provider, service };
   }
-  const context = paymentContext();
-  if (context.provider.name !== name) throw new Error('Webhook provider is not active');
+  if (!REAL_PROVIDERS.has(name)) throw new HttpError(404, 'Webhook provider is not active');
+  const client = serverClient();
+  const context = paymentContext(client);
+  if (context.provider.name !== name) throw new HttpError(404, 'Webhook provider is not active');
   return context;
 }
 
-async function rawBody(request: ApiRequest): Promise<string> {
-  if (typeof request.body === 'string') return request.body;
-  if (request.body instanceof Uint8Array) return new TextDecoder().decode(request.body);
-  const stream = request as unknown as AsyncIterable<Uint8Array>;
-  if (stream && stream[Symbol.asyncIterator]) {
-    const chunks: Uint8Array[] = [];
-    for await (const chunk of stream) chunks.push(chunk);
-    return new TextDecoder().decode(concat(chunks));
-  }
-  return JSON.stringify(request.body ?? {});
-}
-
-function concat(chunks: Uint8Array[]): Uint8Array {
-  const size = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
-  const output = new Uint8Array(size); let offset = 0;
-  for (const chunk of chunks) { output.set(chunk, offset); offset += chunk.byteLength; }
-  return output;
+function singleQuery(value: string | string[] | undefined): string | undefined {
+  const result = Array.isArray(value) ? value[0] : value;
+  return result?.trim() || undefined;
 }

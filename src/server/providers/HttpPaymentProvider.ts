@@ -6,6 +6,10 @@ export interface HttpPaymentProviderConfig {
   baseUrl: string;
   apiKey: string;
   webhookSecret?: string;
+  /** Public/secret pair used by providers that sign outbound requests (TAYPI). */
+  publicKey?: string;
+  secretKey?: string;
+  timeoutMs?: number;
   fetchImpl?: typeof fetch;
 }
 
@@ -20,7 +24,7 @@ export abstract class HttpPaymentProvider implements PaymentProvider {
 
   async createPayment(input: CreatePaymentInput): Promise<ProviderPayment> {
     const response = await this.request('/payments', {
-      method: 'POST', body: JSON.stringify({
+      method: 'POST', headers: { 'idempotency-key': input.reference }, body: JSON.stringify({
         reference: input.reference, amount_cents: input.amountCents,
         currency: input.currency ?? 'PEN', expires_at: input.expiresAt,
       }),
@@ -31,7 +35,9 @@ export abstract class HttpPaymentProvider implements PaymentProvider {
     return {
       providerPaymentId,
       checkoutUrl: typeof data.checkout_url === 'string' ? data.checkout_url : undefined,
+      checkoutToken: typeof data.checkout_token === 'string' ? data.checkout_token : undefined,
       qrCode: typeof data.qr_code === 'string' ? data.qr_code : undefined,
+      ...(typeof data.qr_image === 'string' ? { qrCode: data.qr_image } : {}),
       expiresAt: typeof data.expires_at === 'string' ? data.expires_at : input.expiresAt ?? undefined,
       providerData: data,
     };
@@ -43,14 +49,18 @@ export abstract class HttpPaymentProvider implements PaymentProvider {
     return {
       providerPaymentId: String(body.provider_payment_id ?? body.id ?? providerPaymentId),
       checkoutUrl: typeof body.checkout_url === 'string' ? body.checkout_url : undefined,
+      checkoutToken: typeof body.checkout_token === 'string' ? body.checkout_token : undefined,
       qrCode: typeof body.qr_code === 'string' ? body.qr_code : undefined,
+      ...(typeof body.qr_image === 'string' ? { qrCode: body.qr_image } : {}),
       expiresAt: typeof body.expires_at === 'string' ? body.expires_at : undefined,
       providerData: body,
     };
   }
 
   async cancelPayment(providerPaymentId: string): Promise<void> {
-    await this.request(`/payments/${encodeURIComponent(providerPaymentId)}/cancel`, { method: 'POST', body: '{}' });
+    await this.request(`/payments/${encodeURIComponent(providerPaymentId)}/cancel`, {
+      method: 'POST', headers: { 'idempotency-key': `cancel:${providerPaymentId}` }, body: '{}',
+    });
   }
 
   async verifyWebhook(request: WebhookRequest): Promise<VerifiedWebhook> {
@@ -78,8 +88,14 @@ export abstract class HttpPaymentProvider implements PaymentProvider {
   private async request(path: string, init: RequestInit): Promise<unknown> {
     let response: Response;
     try {
+      const timeout = this.config.timeoutMs ?? 15_000;
       response = await this.fetchImpl(`${this.config.baseUrl.replace(/\/$/, '')}${path}`, {
-        ...init, headers: { authorization: `Bearer ${this.config.apiKey}`, 'content-type': 'application/json', ...(init.headers ?? {}) },
+        ...init,
+        signal: init.signal ?? AbortSignal.timeout(timeout),
+        headers: {
+          authorization: `Bearer ${this.config.apiKey}`, 'content-type': 'application/json',
+          ...(init.headers ?? {}),
+        },
       });
     } catch (error) {
       throw new ProviderError(`${this.name} request failed: ${error instanceof Error ? error.message : 'unknown error'}`);
@@ -90,11 +106,6 @@ export abstract class HttpPaymentProvider implements PaymentProvider {
     if (!response.ok) throw new ProviderError(`${this.name} API error`, response.status, 'PROVIDER_HTTP_ERROR');
     return data;
   }
-}
-
-export class TaypiProvider extends HttpPaymentProvider {
-  readonly name = 'taypi';
-  protected signatureHeader(request: WebhookRequest): string | undefined { return header(request.headers, 'x-taypi-signature') ?? header(request.headers, 'x-webhook-signature'); }
 }
 
 export class CulqiProvider extends HttpPaymentProvider {

@@ -31,7 +31,9 @@ npm install
 copy .env.example .env.local
 ```
 
-En macOS/Linux, use `cp .env.example .env.local`. Complete las variables de Supabase en `.env.local`; no las confirme en Git.
+En macOS/Linux, use `cp .env.example .env.local`. Complete `VITE_SUPABASE_URL` y `VITE_SUPABASE_ANON_KEY` para el navegador, además de `SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY` para las funciones serverless; no confirme secretos en Git.
+
+La sesión del navegador usa Supabase Auth (Email/Password), persiste mediante el cliente oficial y envía `Authorization: Bearer <access_token>` a cada endpoint protegido. Cada usuario debe tener una fila en `public.user_roles` con rol `ADMIN` o `CASHIER`; el frontend no acepta el rol desde metadata para autorizar operaciones.
 
 Ejecute las migraciones de `supabase/migrations/` en el proyecto Supabase. Después inicie el entorno:
 
@@ -48,7 +50,7 @@ npm run build
 
 ## Variables de entorno
 
-Consulte [.env.example](.env.example). `PAYMENT_PROVIDER=mock` es la configuración segura para desarrollo. Las claves `SUPABASE_SERVICE_ROLE_KEY` y de proveedores solo deben existir en el backend/serverless; nunca deben exponerse como variables `VITE_*` ni enviarse al navegador.
+Consulte [.env.example](.env.example). `PAYMENT_PROVIDER=mock` es la configuración segura para desarrollo. `VITE_DEMO_MODE=true` habilita explícitamente el flujo offline local y solo tiene efecto en builds no productivos; sin esa bandera, la app falla cerrado si Supabase no está configurado y nunca crea sesiones falsas ni recupera pagos desde `localStorage`. Las claves `SUPABASE_SERVICE_ROLE_KEY` y de proveedores solo deben existir en el backend/serverless; nunca deben exponerse como variables `VITE_*` ni enviarse al navegador.
 
 ## Probar el flujo mock
 
@@ -79,13 +81,28 @@ Cada adaptador debe autenticar el evento, buscar la referencia, comparar monto y
 
 ## Activar Taypi
 
-Primero valide la documentación actual y el sandbox oficial de Taypi. Configure las variables de Taypi en el entorno serverless y cambie:
+La integración de `TaypiProvider` usa la API REST oficial de TAYPI. Configure las claves en el entorno serverless (nunca en `VITE_*`) y cambie:
 
 ```text
 PAYMENT_PROVIDER=taypi
 ```
 
-La interfaz de caja, el modelo y el pipeline de confirmación no deben cambiar. No copie código PHP/WHMCS de repositorios de referencia; reimplemente el contrato TypeScript, la firma HMAC, expiración, estados e idempotencia según la documentación vigente del proveedor.
+Variables requeridas:
+
+```text
+TAYPI_PUBLIC_KEY=taypi_pk_live_...
+TAYPI_SECRET_KEY=taypi_sk_live_...
+TAYPI_WEBHOOK_SECRET=...
+TAYPI_API_URL=https://app.taypi.pe
+```
+
+Para sandbox use claves `taypi_pk_test_*`/`taypi_sk_test_*`, `TAYPI_SANDBOX=true` y `TAYPI_API_URL=https://sandbox.taypi.pe`. Si `TAYPI_API_URL` queda vacío, el adaptador selecciona sandbox para una public key `*_test_*` y producción para una public key `*_live_*`.
+
+El adaptador llama `POST /api/v1/payments` con monto decimal (por ejemplo, `"30.50"`), `currency: "PEN"` y la referencia como `Idempotency-Key`. Firma cada request con HMAC-SHA256 sobre `{timestamp}\n{method}\n{path}\n{body}`, envía `Authorization: Bearer <TAYPI_PUBLIC_KEY>` y conserva el `payment_id`, `qr_image`, `checkout_url` y `expires_at` devueltos por TAYPI. Las consultas usan `GET /api/v1/payments/:payment_id`; las cancelaciones, `POST /api/v1/payments/:payment_id/cancel`.
+
+Configure en el panel de TAYPI el webhook `https://<dominio-produccion>/api/webhooks/taypi`. El endpoint conserva el body crudo, valida `Taypi-Signature` (`sha256=<hex>`) con `TAYPI_WEBHOOK_SECRET`, compara referencia, monto y moneda en el servicio de pagos, y acepta `payment.completed`, `payment.expired`, `payment.cancelled`, `payment.failed` y `payment.rejected`. Los webhooks no se consideran confirmación hasta superar todas esas validaciones.
+
+Antes de procesar dinero real, complete la verificación KYB de la cuenta de TAYPI, registre el webhook HTTPS de producción y ejecute un pago real de extremo a extremo. Las claves de sandbox no procesan dinero real ni funcionan en `app.taypi.pe`.
 
 ## Supabase
 

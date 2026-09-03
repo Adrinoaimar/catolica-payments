@@ -1,21 +1,25 @@
-import { serverClient, requireUser, sendError, type ApiRequest, type ApiResponse } from '../_shared'
+import { PaymentService } from '../../src/server';
+import {
+  parseReference,
+  paymentRepository,
+  publicPayment,
+  requireUser,
+  sendError,
+  serverClient,
+  type ApiRequest,
+  type ApiResponse,
+  HttpError,
+} from '../_shared';
 
-export default async function handler(request: ApiRequest, response: ApiResponse) {
-  if (request.method !== 'GET') return response.status(405).json({ error: 'Method not allowed' })
+export default async function handler(request: ApiRequest, response: ApiResponse): Promise<void> {
+  if (request.method !== 'GET') { response.status(405).json({ error: 'Method not allowed' }); return; }
   try {
-    const client = serverClient()
-    await requireUser(request, client)
-    const raw = request.query?.reference
-    const reference = Array.isArray(raw) ? raw[0] : raw
-    if (!reference) return response.status(400).json({ error: 'Reference required' })
-    const { data, error } = await client.from('payments').select('*').eq('reference', reference).maybeSingle()
-    if (error) throw error
-    if (!data) return response.status(404).json({ error: 'Payment not found' })
-    return response.status(200).json({
-      id: data.id, reference: data.reference, amountCents: data.amount_cents, currency: data.currency,
-      provider: data.provider, providerPaymentId: data.provider_payment_id, status: data.status,
-      createdBy: data.created_by, createdAt: data.created_at, expiresAt: data.expires_at,
-      paidAt: data.paid_at, cancelledAt: data.cancelled_at, providerData: data.provider_data ?? {},
-    })
-  } catch (error) { sendError(response, error) }
+    const client = serverClient();
+    await requireUser(request, client);
+    const raw = request.query?.reference;
+    const reference = parseReference(Array.isArray(raw) ? raw[0] : raw);
+    const payment = await new PaymentService({ repository: paymentRepository(client) }).findPaymentByReference(reference);
+    if (!payment) throw new HttpError(404, 'Payment not found');
+    response.status(200).json(publicPayment(payment));
+  } catch (error) { sendError(response, error); }
 }

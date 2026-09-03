@@ -1,36 +1,52 @@
 import { useEffect, useState } from 'react'
 import { Sidebar, type AppSection } from './components/Sidebar'
-import { MenuIcon, PlusIcon, SearchIcon, DownloadIcon, FilterIcon, ArrowIcon, CheckIcon, ClockIcon, QrIcon, CashIcon, ChartIcon } from './components/Icons'
+import { MenuIcon, PlusIcon, SearchIcon, DownloadIcon, FilterIcon, ArrowIcon, CheckIcon, ClockIcon, QrIcon, CashIcon, ChartIcon, InfoIcon } from './components/Icons'
 import { BrandMark } from './components/BrandMark'
 import { LoginPage } from './pages/LoginPage'
 import { CashierPage } from './pages/CashierPage'
 import { PaymentPage } from './pages/PaymentPage'
-import { loadPayments, loadSession, savePayments, saveSession, clearSession, simulateMockPayment } from './lib/demoStore'
+import { listPayments, loadPayments, savePayments, simulateMockPayment } from './lib/demoStore'
 import { formatSoles } from './lib/format'
 import type { Payment, SessionUser } from './types'
+import { AuthProvider, useAuth } from './lib/auth'
+import { isDemoMode } from './lib/supabase'
 import './styles.css'
 
 function App() {
-  const [user, setUser] = useState<SessionUser | null>(() => loadSession())
+  const { user, loading: authLoading, error: authError, signIn, signOut, resetPassword } = useAuth()
   const [section, setSection] = useState<AppSection>('cashier')
   const [payments, setPayments] = useState<Payment[]>(() => loadPayments())
   const [activePayment, setActivePayment] = useState<Payment | null>(null)
+  const [ledgerError, setLedgerError] = useState<string | null>(null)
   const [mobileMenu, setMobileMenu] = useState(false)
   const [path, setPath] = useState(() => window.location.pathname)
   useEffect(() => { const sync = () => { const next = loadPayments(); setPayments(next); setActivePayment((current) => current ? next.find((item) => item.reference === current.reference) ?? current : current) }; window.addEventListener('catolica:payments-updated', sync); window.addEventListener('storage', sync); return () => { window.removeEventListener('catolica:payments-updated', sync); window.removeEventListener('storage', sync) } }, [])
   useEffect(() => { const syncPath = () => setPath(window.location.pathname); window.addEventListener('popstate', syncPath); return () => window.removeEventListener('popstate', syncPath) }, [])
-  useEffect(() => { if (user) saveSession(user) }, [user])
+  useEffect(() => {
+    if (!user) { setPayments(loadPayments()); setLedgerError(null); return }
+    let active = true
+    void listPayments().then((next) => {
+      if (!active) return
+      setPayments(next)
+      setLedgerError(null)
+    }).catch((reason) => {
+      if (!active) return
+      setLedgerError(reason instanceof Error ? reason.message : 'No se pudieron cargar las operaciones.')
+    })
+    return () => { active = false }
+  }, [user])
   const paidPayment = (payment: Payment) => { setActivePayment(payment); setPayments((current) => { const next = current.map((item) => item.id === payment.id || item.reference === payment.reference ? payment : item); savePayments(next); return next }) }
-  const simulatorReference = import.meta.env.PROD ? undefined : path.match(/^\/dev\/mock-payment\/([^/]+)/)?.[1]
+  const simulatorReference = isDemoMode ? path.match(/^\/dev\/mock-payment\/([^/]+)/)?.[1] : undefined
   if (simulatorReference) return <MockSimulator reference={decodeURIComponent(simulatorReference)} payments={payments} onComplete={(payment) => { paidPayment(payment); window.history.pushState({}, '', '/'); setPath('/') }} />
-  if (!user) return <LoginPage onLogin={(next) => { setUser(next); setSection('cashier') }} />
+  if (authLoading) return <div className="login-shell"><div className="login-form-panel"><div className="login-form-wrap"><div className="eyebrow">ACCESO AL SISTEMA</div><h2>Validando sesión…</h2></div></div></div>
+  if (!user) return <LoginPage onLogin={async (email, password) => { const next = await signIn(email, password); setSection('cashier'); return next }} authError={authError} demoMode={isDemoMode} onResetPassword={resetPassword} />
 
   const create = (payment: Payment) => { setPayments((current) => [payment, ...current.filter((item) => item.id !== payment.id)]); setActivePayment(payment) }
-  const logout = () => { clearSession(); setUser(null); setActivePayment(null) }
+  const logout = () => { void signOut().finally(() => setActivePayment(null)) }
   const newCharge = () => { setActivePayment(null); setSection('cashier') }
 
   return <div className="app-shell"><Sidebar user={user} section={section} onNavigate={(next) => { setSection(next); setActivePayment(null) }} onLogout={logout} open={mobileMenu} onClose={() => setMobileMenu(false)} />
-    <div className="main-shell"><header className="topbar"><button className="mobile-menu" aria-label="Abrir menú" onClick={() => setMobileMenu(true)}><MenuIcon size={22} /></button><div className="topbar-title"><span className="topbar-kicker">GRUPO LA CATÓLICA</span><span className="topbar-context">/ {activePayment ? 'Cobro digital' : section === 'cashier' ? 'Punto de cobro' : section === 'dashboard' ? 'Resumen general' : section === 'operations' ? 'Operaciones' : 'Reportes'}</span></div><div className="topbar-actions"><button className="icon-button topbar-search" aria-label="Buscar"><SearchIcon size={19} /></button><span className="topbar-divider" /><span className="avatar">{user.initials}</span><span className="topbar-user"><strong>{user.name}</strong><small>{user.role === 'ADMIN' ? 'Administrador' : 'Cajero'}</small></span></div></header><main className="content-shell">{activePayment ? <PaymentPage payment={activePayment} onPaid={paidPayment} onNew={newCharge} onSimulator={(payment) => { const popup = window.open(`/dev/mock-payment/${payment.reference}`, '_blank', 'noopener,noreferrer'); if (!popup) { window.history.pushState({}, '', `/dev/mock-payment/${payment.reference}`); window.dispatchEvent(new PopStateEvent('popstate')) } }} /> : section === 'cashier' ? <CashierPage user={user} onCreated={create} /> : <BackOffice section={section} payments={payments} user={user} onNew={newCharge} />}</main></div></div>
+    <div className="main-shell"><header className="topbar"><button className="mobile-menu" aria-label="Abrir menú" onClick={() => setMobileMenu(true)}><MenuIcon size={22} /></button><div className="topbar-title"><span className="topbar-kicker">GRUPO LA CATÓLICA</span><span className="topbar-context">/ {activePayment ? 'Cobro digital' : section === 'cashier' ? 'Punto de cobro' : section === 'dashboard' ? 'Resumen general' : section === 'operations' ? 'Operaciones' : 'Reportes'}</span></div><div className="topbar-actions"><button className="icon-button topbar-search" aria-label="Buscar"><SearchIcon size={19} /></button><span className="topbar-divider" /><span className="avatar">{user.initials}</span><span className="topbar-user"><strong>{user.name}</strong><small>{user.role === 'ADMIN' ? 'Administrador' : 'Cajero'}</small></span></div></header><main className="content-shell">{ledgerError && <div className="form-error" role="alert"><InfoIcon size={16} /> {ledgerError}</div>}{activePayment ? <PaymentPage payment={activePayment} onPaid={paidPayment} onNew={newCharge} demoMode={isDemoMode} onSimulator={(payment) => { const popup = window.open(`/dev/mock-payment/${payment.reference}`, '_blank', 'noopener,noreferrer'); if (!popup) { window.history.pushState({}, '', `/dev/mock-payment/${payment.reference}`); window.dispatchEvent(new PopStateEvent('popstate')) } }} /> : section === 'cashier' ? <CashierPage user={user} onCreated={create} /> : <BackOffice section={section} payments={payments} user={user} onNew={newCharge} />}</main></div></div>
 }
 
 function MockSimulator({ reference, payments, onComplete }: { reference: string; payments: Payment[]; onComplete: (payment: Payment) => void }) {
@@ -57,4 +73,4 @@ function MetricCard({ label, value, detail, trend, accent, icon }: { label: stri
 function ReportCard({ label, value, detail }: { label: string; value: string; detail: string }) { return <div className="report-card"><span>{label}</span><strong>{value}</strong><small>{detail}</small></div> }
 function OperationRow({ payment, compact = false }: { payment: Payment; compact?: boolean }) { return <div className={`operation-row-table ${compact ? 'operation-row-table--compact' : ''}`}><div className="operation-ref"><span className={`operation-method-icon ${payment.method === 'CASH' ? 'operation-method-icon--cash' : ''}`}>{payment.method === 'CASH' ? <CashIcon size={15} /> : <QrIcon size={15} />}</span><span><strong>{payment.reference}</strong><small>{payment.method === 'CASH' ? 'Pago en efectivo' : 'Pago digital'}</small></span></div><strong className="operation-amount">{formatSoles(payment.amountCents)}</strong><span className="method-label">{payment.method === 'CASH' ? 'Efectivo' : 'Digital'}</span><span className={`status-badge status-badge--${payment.status.toLowerCase()}`}><i />{payment.status === 'PAID' ? 'Pagado' : payment.status === 'PENDING' ? 'Pendiente' : payment.status}</span><span className="operation-cashier">{payment.createdBy}</span><span className="operation-time">{new Date(payment.createdAt).toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' })}</span></div> }
 
-export default App
+export default function AppWithAuth() { return <AuthProvider><App /></AuthProvider> }

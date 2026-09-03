@@ -48,6 +48,8 @@ export interface CreatePaymentInput {
 export interface ProviderPayment {
   providerPaymentId: string;
   checkoutUrl?: string;
+  /** Opaque checkout token used by providers such as TAYPI. */
+  checkoutToken?: string;
   qrCode?: string;
   expiresAt?: string;
   providerData?: Record<string, unknown>;

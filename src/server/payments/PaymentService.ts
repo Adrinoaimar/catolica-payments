@@ -6,7 +6,8 @@ import { generateReference } from './reference';
 
 export interface PaymentServiceOptions {
   repository: PaymentRepository;
-  provider: PaymentProvider;
+  /** Provider is required for digital payments, optional for cash-only routes. */
+  provider?: PaymentProvider;
   now?: () => Date;
   reference?: () => string;
   expiryMinutes?: number;
@@ -33,21 +34,32 @@ export class PaymentService {
 
   async createDigitalPayment(input: { amountCents: number; createdBy?: string | null }): Promise<CreatedPayment> {
     this.validateAmount(input.amountCents);
+    const provider = this.digitalProvider();
     const createdAt = this.now();
     const expiresAt = new Date(createdAt.getTime() + this.expiryMinutes * 60_000);
     const reference = this.makeReference();
-    const providerPayment = await this.options.provider.createPayment({
+    const providerPayment = await provider.createPayment({
       amountCents: input.amountCents, currency: 'PEN', reference,
       createdBy: input.createdBy ?? null, expiresAt: expiresAt.toISOString(),
     });
     const payment: Payment = {
       id: randomUUID(), reference, amountCents: input.amountCents, currency: 'PEN',
-      provider: this.options.provider.name, providerPaymentId: providerPayment.providerPaymentId,
+      provider: provider.name, providerPaymentId: providerPayment.providerPaymentId,
       status: 'PENDING', createdBy: input.createdBy ?? null, createdAt: createdAt.toISOString(),
       expiresAt: providerPayment.expiresAt ?? expiresAt.toISOString(), paidAt: null, cancelledAt: null,
       providerData: providerPayment.providerData ?? {},
     };
-    await this.options.repository.insert(payment);
+    try {
+      await this.options.repository.insert(payment);
+    } catch (error) {
+      // External checkout already exists. Best-effort cancellation prevents an
+      // orphaned QR when the ledger insert fails (for example, a duplicate
+      // reference or a transient database error).
+      try { await provider.cancelPayment(providerPayment.providerPaymentId); } catch (cancelError) {
+        console.error('Could not cancel orphaned provider payment', cancelError);
+      }
+      throw error;
+    }
     return { payment, providerPayment };
   }
 
@@ -69,6 +81,7 @@ export class PaymentService {
   }
 
   async processWebhook(webhook: VerifiedWebhook): Promise<{ payment: Payment; changed: boolean }> {
+    const provider = this.digitalProvider();
     if (!webhook.eventId || !webhook.providerPaymentId || !webhook.reference) throw new Error('Invalid webhook');
     this.validateAmount(webhook.amountCents);
     const payment = await this.options.repository.findByProviderPaymentId(webhook.providerPaymentId);
@@ -77,10 +90,21 @@ export class PaymentService {
     if (payment.amountCents !== webhook.amountCents || payment.currency !== webhook.currency) throw new Error('Webhook amount mismatch');
     if (webhook.status !== 'PAID') throw new Error(`Webhook status is not payable: ${webhook.status}`);
     const result = await this.options.repository.markPaidFromWebhook({
-      paymentId: payment.id, provider: this.options.provider.name, providerEventId: webhook.eventId,
+      paymentId: payment.id, provider: provider.name, amountCents: webhook.amountCents, currency: webhook.currency,
+      providerEventId: webhook.eventId,
       payload: webhook.payload, eventType: webhook.eventType, paidAt: this.now().toISOString(),
     });
     return { payment: result.payment, changed: result.changed };
+  }
+
+  /** Read ledger state and expire an overdue pending payment transactionally. */
+  async findPaymentByReference(reference: string): Promise<Payment | null> {
+    const payment = await this.options.repository.findByReference(reference);
+    if (!payment) return null;
+    if (payment.status === 'PENDING' && payment.expiresAt && new Date(payment.expiresAt).getTime() <= this.now().getTime()) {
+      return (await this.options.repository.markExpired(payment.id, this.now().toISOString())).payment;
+    }
+    return payment;
   }
 
   async expirePayments(now = this.now()): Promise<Payment[]> {
@@ -96,5 +120,10 @@ export class PaymentService {
   private validateAmount(amountCents: number): void {
     if (!Number.isSafeInteger(amountCents) || amountCents <= 0) throw new Error('Amount must be greater than zero');
     if (amountCents > this.maxAmountCents) throw new Error('Amount exceeds maximum');
+  }
+
+  private digitalProvider(): PaymentProvider {
+    if (!this.options.provider) throw new Error('Digital payment provider is not configured');
+    return this.options.provider;
   }
 }

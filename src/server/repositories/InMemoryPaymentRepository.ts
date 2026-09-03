@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { PaymentRepository } from './PaymentRepository';
+import type { PaymentListFilters, PaymentRepository } from './PaymentRepository';
 import type { Payment, PaymentEvent } from '../payments/types';
 
 /** Deterministic repository used by local mock mode and unit tests. */
@@ -35,6 +35,18 @@ export class InMemoryPaymentRepository implements PaymentRepository {
     return payment ? structuredClone(payment) : null;
   }
 
+  async list(filters: PaymentListFilters = {}): Promise<Payment[]> {
+    const from = filters.from ? new Date(filters.from).getTime() : Number.NEGATIVE_INFINITY;
+    const to = filters.to ? new Date(filters.to).getTime() : Number.POSITIVE_INFINITY;
+    const values = [...this.payments.values()]
+      .filter((payment) => !filters.status || payment.status === filters.status)
+      .filter((payment) => !filters.provider || payment.provider === filters.provider)
+      .filter((payment) => !filters.createdBy || payment.createdBy === filters.createdBy)
+      .filter((payment) => { const time = new Date(payment.createdAt).getTime(); return time >= from && time <= to; })
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return values.slice(0, filters.limit ?? 100).map((payment) => structuredClone(payment));
+  }
+
   async findEventByProviderEventId(providerEventId: string): Promise<PaymentEvent | null> {
     const event = this.eventIds.get(providerEventId);
     return event ? structuredClone(event) : null;
@@ -62,6 +74,8 @@ export class InMemoryPaymentRepository implements PaymentRepository {
   async markPaidFromWebhook(input: {
     paymentId: string;
     provider: string;
+    amountCents: number;
+    currency: string;
     providerEventId: string;
     payload: unknown;
     eventType: string;
