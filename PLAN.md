@@ -28,6 +28,7 @@ Construir una caja web para Grupo La Católica que genere cobros digitales por o
 - [x] Implementar endpoints de cobro, efectivo, consulta y `/api/webhooks/mock`.
 - [x] Deshabilitar `/dev/mock-payment/:reference` en producción.
 - [x] Conectar actualización de estado con Supabase Realtime y polling controlado.
+- [x] Proteger la UI frente a respuestas fuera de orden y resincronizar al recuperar foco.
 - [x] Ejecutar `npm install`, `npm test` y `npm run build`.
 
 ### Fase 2 — Taypi
@@ -35,6 +36,7 @@ Construir una caja web para Grupo La Católica que genere cobros digitales por o
 - [x] Confirmar documentación y contrato vigente de Taypi antes de activar credenciales.
 - [x] Implementar creación de checkout/QR, expiración y consulta en `TaypiProvider`.
 - [x] Implementar verificación HMAC y normalización de estados.
+- [x] Validar respuesta de creación, mapear checkout token y reintentar fallos transitorios con backoff acotado.
 - [ ] Probar sandbox con reintentos y webhooks duplicados usando una cuenta Taypi.
 - [x] Activar mediante `PAYMENT_PROVIDER=taypi`, sin cambios en UI ni servicio de dominio.
 - [x] Añadir reconciliación server-side por polling como respaldo del webhook.
