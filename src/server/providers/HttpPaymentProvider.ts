@@ -1,0 +1,108 @@
+import type { CreatePaymentInput, ProviderPayment, VerifiedWebhook, WebhookRequest } from '../payments/types';
+import { header, verifyHmacSha256 } from '../utils/signature';
+import { ProviderError, type PaymentProvider } from './PaymentProvider';
+
+export interface HttpPaymentProviderConfig {
+  baseUrl: string;
+  apiKey: string;
+  webhookSecret?: string;
+  fetchImpl?: typeof fetch;
+}
+
+/** Shared defensive HTTP implementation. Provider-specific payload mapping stays isolated in subclasses. */
+export abstract class HttpPaymentProvider implements PaymentProvider {
+  abstract readonly name: string;
+  protected readonly fetchImpl: typeof fetch;
+
+  constructor(protected readonly config: HttpPaymentProviderConfig) {
+    this.fetchImpl = config.fetchImpl ?? fetch;
+  }
+
+  async createPayment(input: CreatePaymentInput): Promise<ProviderPayment> {
+    const response = await this.request('/payments', {
+      method: 'POST', body: JSON.stringify({
+        reference: input.reference, amount_cents: input.amountCents,
+        currency: input.currency ?? 'PEN', expires_at: input.expiresAt,
+      }),
+    });
+    const data = response as Record<string, unknown>;
+    const providerPaymentId = String(data.provider_payment_id ?? data.id ?? '');
+    if (!providerPaymentId) throw new ProviderError(`${this.name} response missing payment ID`);
+    return {
+      providerPaymentId,
+      checkoutUrl: typeof data.checkout_url === 'string' ? data.checkout_url : undefined,
+      qrCode: typeof data.qr_code === 'string' ? data.qr_code : undefined,
+      expiresAt: typeof data.expires_at === 'string' ? data.expires_at : input.expiresAt ?? undefined,
+      providerData: data,
+    };
+  }
+
+  async getPayment(providerPaymentId: string): Promise<ProviderPayment> {
+    const data = await this.request(`/payments/${encodeURIComponent(providerPaymentId)}`, { method: 'GET' });
+    const body = data as Record<string, unknown>;
+    return {
+      providerPaymentId: String(body.provider_payment_id ?? body.id ?? providerPaymentId),
+      checkoutUrl: typeof body.checkout_url === 'string' ? body.checkout_url : undefined,
+      qrCode: typeof body.qr_code === 'string' ? body.qr_code : undefined,
+      expiresAt: typeof body.expires_at === 'string' ? body.expires_at : undefined,
+      providerData: body,
+    };
+  }
+
+  async cancelPayment(providerPaymentId: string): Promise<void> {
+    await this.request(`/payments/${encodeURIComponent(providerPaymentId)}/cancel`, { method: 'POST', body: '{}' });
+  }
+
+  async verifyWebhook(request: WebhookRequest): Promise<VerifiedWebhook> {
+    if (!this.config.webhookSecret) throw new ProviderError(`${this.name} webhook secret is not configured`, 500, 'PROVIDER_NOT_CONFIGURED');
+    const signature = this.signatureHeader(request);
+    if (!verifyHmacSha256(this.config.webhookSecret, request.rawBody, signature)) {
+      throw new ProviderError(`Invalid ${this.name} webhook signature`, 401, 'INVALID_SIGNATURE');
+    }
+    let data: Record<string, unknown>;
+    try { data = JSON.parse(request.rawBody) as Record<string, unknown>; } catch { throw new ProviderError('Invalid webhook JSON', 400, 'INVALID_WEBHOOK'); }
+    const providerPaymentId = String(data.provider_payment_id ?? data.payment_id ?? data.id ?? '');
+    const reference = String(data.reference ?? data.external_reference ?? '');
+    const eventId = String(data.event_id ?? data.idempotency_key ?? data.id ?? '');
+    const amountCents = Number(data.amount_cents ?? (typeof data.amount === 'number' ? Math.round(data.amount * 100) : NaN));
+    const currency = String(data.currency ?? 'PEN');
+    const status = String(data.status ?? '').toUpperCase();
+    if (!providerPaymentId || !reference || !eventId || !Number.isSafeInteger(amountCents) || !['PAID', 'FAILED', 'EXPIRED', 'CANCELLED'].includes(status)) {
+      throw new ProviderError('Invalid webhook payload', 400, 'INVALID_WEBHOOK');
+    }
+    return { eventId, eventType: String(data.event_type ?? `payment.${status.toLowerCase()}`), providerPaymentId, reference, amountCents, currency, status: status as VerifiedWebhook['status'], payload: data };
+  }
+
+  protected abstract signatureHeader(request: WebhookRequest): string | undefined;
+
+  private async request(path: string, init: RequestInit): Promise<unknown> {
+    let response: Response;
+    try {
+      response = await this.fetchImpl(`${this.config.baseUrl.replace(/\/$/, '')}${path}`, {
+        ...init, headers: { authorization: `Bearer ${this.config.apiKey}`, 'content-type': 'application/json', ...(init.headers ?? {}) },
+      });
+    } catch (error) {
+      throw new ProviderError(`${this.name} request failed: ${error instanceof Error ? error.message : 'unknown error'}`);
+    }
+    const body = await response.text();
+    let data: unknown = {};
+    try { data = body ? JSON.parse(body) : {}; } catch { data = { message: body }; }
+    if (!response.ok) throw new ProviderError(`${this.name} API error`, response.status, 'PROVIDER_HTTP_ERROR');
+    return data;
+  }
+}
+
+export class TaypiProvider extends HttpPaymentProvider {
+  readonly name = 'taypi';
+  protected signatureHeader(request: WebhookRequest): string | undefined { return header(request.headers, 'x-taypi-signature') ?? header(request.headers, 'x-webhook-signature'); }
+}
+
+export class CulqiProvider extends HttpPaymentProvider {
+  readonly name = 'culqi';
+  protected signatureHeader(request: WebhookRequest): string | undefined { return header(request.headers, 'x-culqi-signature') ?? header(request.headers, 'x-webhook-signature'); }
+}
+
+export class MercadoPagoProvider extends HttpPaymentProvider {
+  readonly name = 'mercadopago';
+  protected signatureHeader(request: WebhookRequest): string | undefined { return header(request.headers, 'x-mercadopago-signature') ?? header(request.headers, 'x-webhook-signature'); }
+}

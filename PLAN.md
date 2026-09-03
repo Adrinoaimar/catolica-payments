@@ -1,0 +1,81 @@
+# Plan de implementación: Catolica Payments
+
+## Objetivo
+
+Construir una caja web para Grupo La Católica que genere cobros digitales por operación, reciba confirmaciones únicamente desde webhooks verificados y permita registrar efectivo. El modo `mock` debe cubrir el flujo completo sin credenciales ni costo, para demostraciones y pruebas.
+
+## Alcance de Fase 1 (MVP)
+
+1. Proyecto React/Vite/TypeScript con interfaz responsive para celular, tablet y PC.
+2. Supabase Auth, PostgreSQL, migraciones, índices, constraints y RLS.
+3. Modelo `payments` con dinero en centavos, estados explícitos y referencia única `CAT-YYYYMMDD-XXXXXX`.
+4. Modelo de auditoría `payment_events` para cada cambio financiero.
+5. Contrato `PaymentProvider` y selector por `PAYMENT_PROVIDER`.
+6. `MockPaymentProvider`: QR de prueba, creación de sesión y webhook simulado.
+7. Caja rápida: montos predefinidos, otro monto, pago digital y efectivo.
+8. Pantalla de cobro con contador, estado pendiente, éxito y siguiente cobro.
+9. Dashboard diario con totales digital/efectivo, operaciones y pendientes.
+10. Tests unitarios e integración para dinero, referencias, idempotencia, validación, expiración y efectivo.
+
+## Entregas por fase
+
+### Fase 1 — MVP verificable
+
+- [ ] Instalar dependencias y configurar scripts `test` y `build`.
+- [ ] Crear migraciones y políticas RLS.
+- [ ] Implementar autenticación y autorización por rol (`ADMIN`, `CASHIER`).
+- [ ] Implementar servicio de pagos y adaptador mock.
+- [ ] Implementar endpoints de cobro, efectivo, consulta y `/api/webhooks/mock`.
+- [ ] Deshabilitar `/dev/mock-payment/:reference` en producción.
+- [ ] Conectar actualización de estado con Supabase Realtime o polling controlado.
+- [ ] Ejecutar `npm install`, `npm run test` y `npm run build`.
+
+### Fase 2 — Taypi
+
+- [ ] Confirmar documentación y contrato vigente de Taypi antes de activar credenciales.
+- [ ] Implementar creación de checkout/QR, expiración y consulta en `TaypiProvider`.
+- [ ] Implementar verificación HMAC y normalización de estados.
+- [ ] Probar sandbox con reintentos y webhooks duplicados.
+- [ ] Activar mediante `PAYMENT_PROVIDER=taypi`, sin cambios en UI ni servicio de dominio.
+
+### Fase 3 — Operación y reportes
+
+- [ ] Reportes diario, semanal, mensual y rango personalizado.
+- [ ] Filtros, exportación CSV y permisos de administrador.
+- [ ] Gestión de usuarios, montos rápidos y cancelación de pendientes.
+- [ ] Mejoras UX, accesibilidad y PWA.
+
+### Fase 4 — Proveedores adicionales
+
+- [ ] `CulqiProvider`.
+- [ ] `MercadoPagoProvider`.
+- [ ] Tests de contrato comunes para todos los proveedores.
+
+## Criterios de aceptación del MVP
+
+- Un cajero autenticado selecciona `S/30` y obtiene un QR con referencia nueva en un toque.
+- El pago inicia en `PENDING`; el frontend nunca puede marcarlo `PAID` por sí solo.
+- El simulador llama al webhook mock. El mismo pipeline valida referencia, monto, proveedor e idempotencia y transiciona a `PAID`.
+- Repetir el mismo `payment_id` cinco veces produce como máximo un cambio financiero y un evento efectivo.
+- Un pago por efectivo queda `PAID`, con `provider=CASH` y usuario registrador.
+- La pantalla de cobro y dashboard reflejan el pago sin recarga manual.
+- Dinero se conserva como enteros en centavos; no se usan flotantes para cálculos financieros.
+- `npm install`, `npm run test` y `npm run build` terminan correctamente.
+- Producción rechaza rutas mock, secretos ausentes y webhooks no autenticados.
+
+## Riesgos y decisiones
+
+- Yape/Plin no se integran mediante scraping ni API privada. Solo se usarán APIs/documentación autorizadas del proveedor contratado.
+- La confirmación del backend/webhook es la única fuente de verdad.
+- La selección del proveedor queda fuera del dominio para impedir acoplamiento a una empresa.
+- La operación atómica y una clave única de evento protegen frente a reintentos concurrentes.
+- El repositorio público no contiene secretos, comprobantes, transcripciones ni datos de clientes.
+
+## Secuencia de validación antes de publicar
+
+1. Revisar `git diff` y secretos con un escáner local.
+2. Aplicar migraciones en un proyecto Supabase de prueba.
+3. Ejecutar tests y build de producción.
+4. Probar login, cobro mock, webhook duplicado, monto incorrecto, expiración y efectivo.
+5. Revisar rutas de webhook, cabeceras y variables en Vercel.
+6. Crear commit descriptivo y conectar `main` a despliegue automático.
