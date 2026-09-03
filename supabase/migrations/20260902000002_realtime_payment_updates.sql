@@ -12,6 +12,8 @@ alter table public.payment_updates enable row level security;
 -- listener. Keep the grant explicit so a hardened project does not silently
 -- reject the channel even when the policy below is correct.
 grant usage on schema public to authenticated;
+revoke all on public.user_roles from anon, authenticated;
+grant select on public.user_roles to authenticated;
 grant select on public.payment_updates to authenticated;
 
 -- The browser uses serverless API routes for ledger reads. Do not expose the
