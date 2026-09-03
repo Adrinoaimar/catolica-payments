@@ -68,7 +68,7 @@ Construir una caja web para Grupo La Católica que genere cobros digitales por o
 - La pantalla de cobro y dashboard reflejan el pago sin recarga manual.
 - Dinero se conserva como enteros en centavos; no se usan flotantes para cálculos financieros.
 - `npm install`, `npm run test` y `npm run build` terminan correctamente.
-- Producción rechaza rutas mock, secretos ausentes y webhooks no autenticados.
+- Entornos hospedados rechazan rutas mock, secretos ausentes y webhooks no autenticados.
 
 ## Riesgos y decisiones
 

@@ -62,7 +62,7 @@ Consulte [.env.example](.env.example). `PAYMENT_PROVIDER=mock` es la configuraci
 6. El simulador llama `POST /api/webhooks/mock`; no actualiza la base de datos directamente.
 7. Verifique `PAID`, el mensaje `PAGO RECIBIDO` y el registro en el dashboard.
 
-La ruta `/dev/mock-payment/:reference` debe existir solo cuando el entorno no es producción. El mock no representa una integración real con Yape o Plin.
+La ruta `/dev/mock-payment/:reference` solo se habilita en desarrollo local. Queda bloqueada en Vercel Preview y Production; el mock no representa una integración real con Yape o Plin.
 
 Para efectivo, seleccione el monto, **Efectivo** y confirme. Se crea una operación `PAID` con `provider=CASH` y el usuario autenticado como registrador.
 

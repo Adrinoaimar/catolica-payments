@@ -24,7 +24,7 @@ Ejecute en orden todas las migraciones de `supabase/migrations/`, incluidas `202
 
 ## Rollback seguro
 
-Si el smoke test falla, cambie `PAYMENT_PROVIDER` a `mock` solo en Preview o desactive el despliegue; no marque operaciones manualmente. Revierta el alias de Vercel al último deployment conocido y conserve la base de datos y `payment_events`. Las migraciones son aditivas; no ejecute `DROP TABLE` ni borre el ledger como rollback. Investigue primero logs sin imprimir secretos o payloads crudos.
+Si el smoke test falla, desactive el despliegue o vuelva a un entorno local de desarrollo para usar `PAYMENT_PROVIDER=mock`; los entornos Vercel no deben usar el simulador. No marque operaciones manualmente. Revierta el alias de Vercel al último deployment conocido y conserve la base de datos y `payment_events`. Las migraciones son aditivas; no ejecute `DROP TABLE` ni borre el ledger como rollback. Investigue primero logs sin imprimir secretos o payloads crudos.
 
 ## Scheduler
 
