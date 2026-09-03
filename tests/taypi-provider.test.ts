@@ -86,10 +86,14 @@ describe('TaypiProvider', () => {
       paid_at: '2026-09-02T20:00:00-05:00',
     });
     const signature = createHmac('sha256', webhookSecret).update(rawBody).digest('hex');
-    const provider = new TaypiProvider({ publicKey, secretKey, webhookSecret });
+    const provider = new TaypiProvider({ publicKey, secretKey, webhookSecret, now: () => 1_788_350_400 });
     const webhook = await provider.verifyWebhook({
       rawBody,
-      headers: { 'Taypi-Signature': `sha256=${signature}`, 'Taypi-Webhook-Id': 'wh_fixture_1' },
+      headers: {
+        'Taypi-Signature': `sha256=${signature}`,
+        'Taypi-Timestamp': '1788350400',
+        'Taypi-Webhook-Id': 'wh_fixture_1',
+      },
     });
     expect(webhook).toMatchObject({
       eventId: 'wh_fixture_1',
@@ -105,6 +109,32 @@ describe('TaypiProvider', () => {
   it('rejects an unsigned webhook', async () => {
     const provider = new TaypiProvider({ publicKey, secretKey, webhookSecret });
     await expect(provider.verifyWebhook({ rawBody: '{}', headers: {} })).rejects.toMatchObject({ code: 'INVALID_SIGNATURE', statusCode: 401 });
+  });
+
+  it('rejects a signed webhook outside the replay tolerance window', async () => {
+    const rawBody = JSON.stringify({
+      event: 'payment.completed', payment_id: 'pay_fixture_1', amount: '30.50',
+      currency: 'PEN', status: 'completed', reference: 'CAT-TEST-001',
+    });
+    const signature = createHmac('sha256', webhookSecret).update(rawBody).digest('hex');
+    const provider = new TaypiProvider({ publicKey, secretKey, webhookSecret, now: () => 1_788_350_400 });
+    await expect(provider.verifyWebhook({
+      rawBody,
+      headers: { 'Taypi-Signature': signature, 'Taypi-Timestamp': '1788349200' },
+    })).rejects.toMatchObject({ code: 'INVALID_SIGNATURE', statusCode: 401 });
+  });
+
+  it('rejects a signed webhook with a future timestamp', async () => {
+    const rawBody = JSON.stringify({
+      event: 'payment.completed', payment_id: 'pay_fixture_1', amount: '30.50',
+      currency: 'PEN', status: 'completed', reference: 'CAT-TEST-001',
+    });
+    const signature = createHmac('sha256', webhookSecret).update(rawBody).digest('hex');
+    const provider = new TaypiProvider({ publicKey, secretKey, webhookSecret, now: () => 1_788_350_400 });
+    await expect(provider.verifyWebhook({
+      rawBody,
+      headers: { 'Taypi-Signature': signature, 'Taypi-Timestamp': '1788350461' },
+    })).rejects.toMatchObject({ code: 'INVALID_SIGNATURE', statusCode: 401 });
   });
 });
 

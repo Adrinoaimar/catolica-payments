@@ -27,12 +27,18 @@ export interface TaypiProviderConfig {
   /** Injectable clock for deterministic tests. Returns UNIX seconds. */
   now?: () => number;
   timeoutMs?: number;
+  /** Maximum accepted age for a signed webhook delivery. */
+  webhookToleranceSeconds?: number;
 }
 
 type TaypiPayment = Record<string, unknown>;
 
 const DEFAULT_PRODUCTION_URL = 'https://app.taypi.pe';
 const DEFAULT_SANDBOX_URL = 'https://sandbox.taypi.pe';
+// TAYPI retries deliveries for roughly six minutes. Keep a small additional
+// window for network delay while rejecting long-lived replayed webhooks.
+const DEFAULT_WEBHOOK_TOLERANCE_SECONDS = 10 * 60;
+const MAX_WEBHOOK_FUTURE_SKEW_SECONDS = 60;
 
 export class TaypiProvider implements PaymentProvider {
   readonly name = 'taypi';
@@ -41,6 +47,7 @@ export class TaypiProvider implements PaymentProvider {
   private readonly now: () => number;
   private readonly timeoutMs: number;
   private readonly baseUrl: string;
+  private readonly webhookToleranceSeconds: number;
 
   constructor(private readonly config: TaypiProviderConfig) {
     if (!config.publicKey.trim()) throw new ProviderError('Missing TAYPI_PUBLIC_KEY', 500, 'PROVIDER_NOT_CONFIGURED');
@@ -49,6 +56,7 @@ export class TaypiProvider implements PaymentProvider {
     this.now = config.now ?? (() => Math.floor(Date.now() / 1000));
     this.timeoutMs = config.timeoutMs ?? 15_000;
     this.baseUrl = resolveBaseUrl(config.baseUrl, config.publicKey, config.sandbox);
+    this.webhookToleranceSeconds = normalizeWebhookTolerance(config.webhookToleranceSeconds);
   }
 
   async createPayment(input: CreatePaymentInput): Promise<ProviderPayment> {
@@ -80,6 +88,13 @@ export class TaypiProvider implements PaymentProvider {
     const signature = header(request.headers, 'taypi-signature');
     if (!signature || !verifyWebhookSignature(secret, request.rawBody, signature)) {
       throw new ProviderError('Invalid taypi webhook signature', 401, 'INVALID_SIGNATURE');
+    }
+    const timestamp = parseWebhookTimestamp(header(request.headers, 'taypi-timestamp'));
+    const now = this.now();
+    if (timestamp === null
+      || timestamp > now + MAX_WEBHOOK_FUTURE_SKEW_SECONDS
+      || now - timestamp > this.webhookToleranceSeconds) {
+      throw new ProviderError('Expired or invalid taypi webhook timestamp', 401, 'INVALID_SIGNATURE');
     }
 
     let payload: TaypiPayment;
@@ -302,6 +317,21 @@ function verifyWebhookSignature(secret: string, body: string, supplied: string):
   const expectedBytes = Buffer.from(expected, 'hex');
   const suppliedBytes = Buffer.from(normalized, 'hex');
   return expectedBytes.length === suppliedBytes.length && timingSafeEqual(expectedBytes, suppliedBytes);
+}
+
+function parseWebhookTimestamp(value: string | undefined): number | null {
+  const text = value?.trim() ?? '';
+  if (!/^\d{10}$/.test(text)) return null;
+  const timestamp = Number(text);
+  return Number.isSafeInteger(timestamp) ? timestamp : null;
+}
+
+function normalizeWebhookTolerance(value: number | undefined): number {
+  if (value === undefined) return DEFAULT_WEBHOOK_TOLERANCE_SECONDS;
+  if (!Number.isSafeInteger(value) || value < 60 || value > 24 * 60 * 60) {
+    throw new ProviderError('Invalid webhook tolerance', 500, 'PROVIDER_NOT_CONFIGURED');
+  }
+  return value;
 }
 
 function isRetryableStatus(status: number): boolean {
