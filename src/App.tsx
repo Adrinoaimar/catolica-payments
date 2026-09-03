@@ -64,8 +64,10 @@ function App() {
           setPayments((current) => upsertPayment(current, next))
           setActivePayment((current) => current && current.reference === next.reference ? mergePayment(current, next) : current)
         }).catch(() => {
-          // The API polling path remains authoritative if a transient stream
-          // event races the transaction's read replica.
+          // A stream event can race the API/read replica. Mark the channel
+          // unhealthy so the bounded polling path retries this missed change
+          // instead of leaving a permanently stale payment in the UI.
+          if (active) setRealtimeHealthy(false)
         })
       },
       onStatus: (status, error) => {

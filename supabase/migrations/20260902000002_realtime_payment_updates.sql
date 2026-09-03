@@ -7,6 +7,9 @@ create table if not exists public.payment_updates (
 );
 
 alter table public.payment_updates enable row level security;
+-- Keep DELETE payloads actionable even when the projection is removed before
+-- Realtime broadcasts it. The projection contains no provider secrets.
+alter table public.payment_updates replica identity full;
 
 -- Postgres privileges are checked before RLS by Realtime's postgres_changes
 -- listener. Keep the grant explicit so a hardened project does not silently

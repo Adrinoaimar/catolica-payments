@@ -127,7 +127,7 @@ Antes de procesar dinero real, complete la verificación KYB de la cuenta de TAY
 ## Supabase
 
 1. Cree un proyecto y habilite Email/Password o el proveedor de Auth seleccionado.
-2. Ejecute en orden las migraciones en `supabase/migrations/`, incluidas `20260903000008_harden_webhook_identity.sql` para instalaciones que ya tenían la función RPC anterior y `20260903000009_recoverable_payment_intents.sql` para adjuntar de forma transaccional el checkout externo a una intención pendiente.
+2. Ejecute en orden las migraciones en `supabase/migrations/`, incluidas `20260903000008_harden_webhook_identity.sql` para instalaciones que ya tenían la función RPC anterior, `20260903000009_recoverable_payment_intents.sql` para adjuntar de forma transaccional el checkout externo a una intención pendiente y `20260903000010_realtime_delete_identity.sql` para que los eventos de eliminación sean recuperables en Realtime.
 3. Asigne roles mediante el mecanismo definido por las migraciones (`ADMIN` o `CASHIER`).
 4. Ejecute también `20260902000002_realtime_payment_updates.sql`; crea la proyección mínima `payment_updates`, su trigger y la publicación `supabase_realtime` sin transmitir `provider_data`.
 5. Verifique RLS con ambos roles antes de publicar.

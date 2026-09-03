@@ -416,7 +416,8 @@ export class PaymentService {
     const payment = await this.options.repository.findByReference(reference);
     if (!payment) return null;
     if (payment.status === 'PENDING' && payment.expiresAt && new Date(payment.expiresAt).getTime() <= this.now().getTime()) {
-      return (await this.options.repository.markExpired(payment.id, this.now().toISOString())).payment;
+      const expired = await this.expirePayments(this.now());
+      return expired.find((item) => item.id === payment.id) ?? (await this.options.repository.findById(payment.id)) ?? payment;
     }
     return payment;
   }
@@ -425,6 +426,53 @@ export class PaymentService {
     const expired = await this.options.repository.listPendingExpired(now.toISOString());
     const result: Payment[] = [];
     for (const payment of expired) {
+      // A local timer must never outrank a provider confirmation that was
+      // created before the deadline. Query an attached digital checkout first;
+      // transient provider failures leave the intent PENDING for retry.
+      const provider = this.options.provider;
+      if (provider && payment.provider === provider.name) {
+        if (!payment.providerPaymentId) continue;
+        let state: ProviderPayment;
+        try {
+          state = await provider.getPayment(payment.providerPaymentId);
+        } catch {
+          continue;
+        }
+        if (state.providerPaymentId !== payment.providerPaymentId
+          || state.reference !== payment.reference
+          || state.amountCents !== payment.amountCents
+          || state.currency !== payment.currency) {
+          continue;
+        }
+        if (isTerminalStatus(state.status)) {
+          // A provider PAID response is authoritative unless it explicitly
+          // proves capture happened after the local deadline.
+          if (state.status === 'PAID' && state.paidAt && payment.expiresAt
+            && new Date(state.paidAt).getTime() > new Date(payment.expiresAt).getTime()) {
+            const item = await this.options.repository.markExpired(payment.id, now.toISOString());
+            result.push(item.payment);
+            continue;
+          }
+          const eventId = normalizeReconciliationEventId(state.eventId, provider.name, state.providerPaymentId);
+          const transitioned = await this.processWebhook({
+            eventId,
+            eventType: `payment.${state.status.toLowerCase()}`,
+            providerPaymentId: state.providerPaymentId,
+            reference: state.reference,
+            amountCents: state.amountCents,
+            currency: state.currency ?? payment.currency,
+            status: state.status,
+            payload: { source: 'server_expiry_check', provider_payment_id: state.providerPaymentId, reference: state.reference, status: state.status },
+          });
+          result.push(transitioned.payment);
+          continue;
+        }
+        if (state.status !== 'PENDING') continue;
+      }
+      // CASH and providers without an attached identity have no safe external
+      // state to reconcile here. A provisional digital intent stays pending so
+      // the scheduler can recover its checkout instead of orphaning it.
+      if (provider && payment.provider === provider.name && !payment.providerPaymentId) continue;
       const item = await this.options.repository.markExpired(payment.id, now.toISOString());
       result.push(item.payment);
     }

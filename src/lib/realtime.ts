@@ -45,31 +45,68 @@ export function subscribeToPayments({ userId, onChange, onStatus }: SubscribeToP
 
   const channelName = `payments:${userId}`
   let disposed = false
-  const channel: RealtimeChannel = supabase
-    .channel(channelName)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'payment_updates' }, (payload: RealtimePayload) => {
-      const event = normalizeEvent(payload.eventType)
-      if (!event || disposed) return
-      const row = event === 'DELETE' ? payload.old : payload.new
-      if (!row || typeof row !== 'object') return
-      const id = stringValue(row.id)
-      const reference = stringValue(row.reference)
-      // Do not forward row data. provider_data can contain provider-only
-      // response fields; App re-reads a sanitized public payment by reference.
-      onChange({ event, id, reference })
-    })
-    .subscribe((status, reason) => {
+  let channel: RealtimeChannel | null = null
+  let reconnectTimer: number | null = null
+  let reconnectAttempt = 0
+
+  const scheduleReconnect = () => {
+    if (disposed || reconnectTimer !== null) return
+    const delay = Math.min(30_000, 1_000 * (2 ** Math.min(reconnectAttempt, 5)))
+    reconnectAttempt += 1
+    reconnectTimer = window.setTimeout(() => {
+      reconnectTimer = null
       if (disposed) return
-      if (status === 'SUBSCRIBED' || status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-        const error = reason instanceof Error ? reason : reason ? new Error(String(reason)) : undefined
-        onStatus?.(status, error)
+      if (channel) {
+        const previous = channel
+        channel = null
+        void supabase?.removeChannel(previous)
       }
-    })
+      connect()
+    }, delay)
+  }
+
+  function connect() {
+    if (disposed || !supabase) return
+    const nextChannel = supabase.channel(channelName)
+    // Assign before subscribe: some adapters can synchronously report an
+    // initial state, and that state must not be discarded as stale.
+    channel = nextChannel
+    nextChannel.on('postgres_changes', { event: '*', schema: 'public', table: 'payment_updates' }, (payload: RealtimePayload) => {
+        const event = normalizeEvent(payload.eventType)
+        if (!event || disposed || channel !== nextChannel) return
+        const row = event === 'DELETE' ? payload.old : payload.new
+        if (!row || typeof row !== 'object') return
+        const id = stringValue(row.id)
+        const reference = stringValue(row.reference)
+        // Do not forward row data. provider_data can contain provider-only
+        // response fields; App re-reads a sanitized public payment by reference.
+        // DELETE only needs the primary key, so it remains actionable even if
+        // a deployment uses the default replica identity.
+        if (event === 'DELETE' && !id) return
+        onChange({ event, id, reference })
+      })
+      .subscribe((status, reason) => {
+        if (disposed || channel !== nextChannel) return
+        if (status === 'SUBSCRIBED') {
+          reconnectAttempt = 0
+          onStatus?.(status)
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+          const error = reason instanceof Error ? reason : reason ? new Error(String(reason)) : undefined
+          onStatus?.(status, error)
+          scheduleReconnect()
+        }
+      })
+  }
+
+  connect()
 
   return () => {
     disposed = true
+    if (reconnectTimer !== null) window.clearTimeout(reconnectTimer)
+    reconnectTimer = null
     // removeChannel also calls unsubscribe and clears the Realtime binding.
-    void supabase?.removeChannel(channel)
+    if (channel) void supabase?.removeChannel(channel)
+    channel = null
   }
 }
 

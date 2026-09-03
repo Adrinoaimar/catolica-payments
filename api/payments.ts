@@ -14,7 +14,7 @@ import {
   type ApiRequest,
   type ApiResponse,
 } from './_shared';
-import { PaymentService, type PaymentMethod, type PaymentStatus } from '../src/server';
+import type { PaymentMethod, PaymentStatus } from '../src/server';
 
 const STATUSES: PaymentStatus[] = ['PENDING', 'PAID', 'FAILED', 'EXPIRED', 'CANCELLED'];
 export const config = { api: { bodyParser: { sizeLimit: '64kb' } } };
@@ -25,9 +25,10 @@ export default async function handler(request: ApiRequest, response: ApiResponse
     const client = serverClient();
     const user = await requireUser(request, client);
     if (request.method === 'GET') {
+      const { service } = paymentContext(client);
       const repository = paymentRepository(client);
       // Expiration is enforced server-side even when no scheduled job has run.
-      await new PaymentService({ repository }).expirePayments();
+      await service.expirePayments();
       const filters = parseFilters(request.query, user.role);
       const payments = await repository.list(filters);
       response.status(200).json({ payments: payments.map(publicPayment), count: payments.length });

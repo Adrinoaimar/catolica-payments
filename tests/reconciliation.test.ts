@@ -65,7 +65,7 @@ describe('payment reconciliation', () => {
     expect(repository.events.size).toBe(1);
   });
 
-  it('applies local expiry before an on-demand provider reconciliation', async () => {
+  it('lets a provider confirmation win over a late local expiry check', async () => {
     let now = new Date('2026-09-02T12:00:00.000Z');
     const repository = new InMemoryPaymentRepository();
     const provider = new MockPaymentProvider();
@@ -77,7 +77,7 @@ describe('payment reconciliation', () => {
     const result = await service.reconcilePaymentByReference(created.payment.reference);
 
     expect(result.changed).toBe(false);
-    expect(result.payment.status).toBe('EXPIRED');
+    expect(result.payment.status).toBe('PAID');
     expect(repository.events.size).toBe(1);
   });
 });

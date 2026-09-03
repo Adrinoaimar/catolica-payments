@@ -1,7 +1,6 @@
-import { PaymentService } from '../../src/server';
 import {
   parseReference,
-  paymentRepository,
+  paymentContext,
   publicPayment,
   requireUser,
   sendError,
@@ -18,7 +17,8 @@ export default async function handler(request: ApiRequest, response: ApiResponse
     await requireUser(request, client);
     const raw = request.query?.reference;
     const reference = parseReference(Array.isArray(raw) ? raw[0] : raw);
-    const payment = await new PaymentService({ repository: paymentRepository(client) }).findPaymentByReference(reference);
+    const { service } = paymentContext(client);
+    const payment = await service.findPaymentByReference(reference);
     if (!payment) throw new HttpError(404, 'Payment not found');
     response.status(200).json(publicPayment(payment));
   } catch (error) { sendError(response, error); }
