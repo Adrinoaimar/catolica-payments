@@ -48,6 +48,8 @@ npm run test
 npm run build
 ```
 
+Cada push o pull request ejecuta automáticamente tests, build y auditoría de dependencias mediante GitHub Actions (`.github/workflows/ci.yml`).
+
 ## Variables de entorno
 
 Consulte [.env.example](.env.example). `PAYMENT_PROVIDER=mock` es la configuración segura para desarrollo. `VITE_DEMO_MODE=true` habilita explícitamente el flujo offline local y solo tiene efecto en builds no productivos; sin esa bandera, la app falla cerrado si Supabase no está configurado y nunca crea sesiones falsas ni recupera pagos desde `localStorage`. `CRON_SECRET` protege la reconciliación programada. Las claves `SUPABASE_SERVICE_ROLE_KEY`, `CRON_SECRET` y de proveedores solo deben existir en el backend/serverless; nunca deben exponerse como variables `VITE_*` ni enviarse al navegador.
