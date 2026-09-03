@@ -12,6 +12,7 @@ import type { Payment, SessionUser } from './types'
 import { AuthProvider, useAuth } from './lib/auth'
 import { isDemoMode } from './lib/supabase'
 import { fetchPublicPayment, subscribeToPayments } from './lib/realtime'
+import { mergePayment, mergePaymentSnapshot } from './lib/paymentMerge'
 import './styles.css'
 
 function App() {
@@ -23,7 +24,8 @@ function App() {
   const [realtimeHealthy, setRealtimeHealthy] = useState(false)
   const [mobileMenu, setMobileMenu] = useState(false)
   const [path, setPath] = useState(() => window.location.pathname)
-  useEffect(() => { const sync = () => { const next = loadPayments(); setPayments(next); setActivePayment((current) => current ? next.find((item) => item.reference === current.reference) ?? current : current) }; window.addEventListener('catolica:payments-updated', sync); window.addEventListener('storage', sync); return () => { window.removeEventListener('catolica:payments-updated', sync); window.removeEventListener('storage', sync) } }, [])
+  const userId = user?.id
+  useEffect(() => { const sync = () => { const next = loadPayments(); setPayments((current) => mergePaymentSnapshot(current, next)); setActivePayment((current) => { if (!current) return current; const nextPayment = next.find((item) => item.reference === current.reference); return nextPayment ? mergePayment(current, nextPayment) : current }); }; window.addEventListener('catolica:payments-updated', sync); window.addEventListener('storage', sync); return () => { window.removeEventListener('catolica:payments-updated', sync); window.removeEventListener('storage', sync) } }, [])
   useEffect(() => { const syncPath = () => setPath(window.location.pathname); window.addEventListener('popstate', syncPath); return () => window.removeEventListener('popstate', syncPath) }, [])
   useEffect(() => {
     if (!user || path !== '/login') return
@@ -31,23 +33,23 @@ function App() {
     setPath('/')
   }, [user, path])
   useEffect(() => {
-    if (!user) { setPayments(loadPayments()); setLedgerError(null); setRealtimeHealthy(false); return }
+    if (!userId) { setPayments(loadPayments()); setLedgerError(null); setRealtimeHealthy(false); return }
     let active = true
     void listPayments().then((next) => {
       if (!active) return
-      setPayments(next)
+      setPayments((current) => mergePaymentSnapshot(current, next))
       setLedgerError(null)
     }).catch((reason) => {
       if (!active) return
       setLedgerError(reason instanceof Error ? reason.message : 'No se pudieron cargar las operaciones.')
     })
     return () => { active = false }
-  }, [user])
+  }, [userId])
   useEffect(() => {
-    if (!user || isDemoMode) { setRealtimeHealthy(false); return }
+    if (!userId || isDemoMode) { setRealtimeHealthy(false); return }
     let active = true
     const unsubscribe = subscribeToPayments({
-      userId: user.id,
+      userId,
       onChange: (change) => {
         if (!active) return
         if (change.event === 'DELETE') {
@@ -59,7 +61,7 @@ function App() {
         void fetchPublicPayment(change.reference).then((next) => {
           if (!active) return
           setPayments((current) => upsertPayment(current, next))
-          setActivePayment((current) => current && current.reference === next.reference ? { ...next, createdBy: current.createdBy || next.createdBy } : current)
+          setActivePayment((current) => current && current.reference === next.reference ? mergePayment(current, next) : current)
         }).catch(() => {
           // The API polling path remains authoritative if a transient stream
           // event races the transaction's read replica.
@@ -77,8 +79,12 @@ function App() {
           // missed while the browser was offline.
           void listPayments().then((next) => {
             if (!active) return
-            setPayments(next)
-            setActivePayment((current) => current ? next.find((item) => item.reference === current.reference) ?? current : current)
+            setPayments((current) => mergePaymentSnapshot(current, next))
+            setActivePayment((current) => {
+              if (!current) return current
+              const nextPayment = next.find((item) => item.reference === current.reference)
+              return nextPayment ? mergePayment(current, nextPayment) : current
+            })
           }).catch(() => { /* current snapshot remains until next event */ })
         } else if (status === 'CLOSED') {
           setRealtimeHealthy(false)
@@ -87,21 +93,49 @@ function App() {
       },
     })
     return () => { active = false; unsubscribe() }
-  }, [user])
+  }, [userId])
   useEffect(() => {
-    if (!user || isDemoMode) return
+    if (!userId || isDemoMode) return
     // Realtime is the primary channel. This bounded fallback keeps dashboard
     // and operations current during reconnects or provider/network outages.
     const interval = window.setInterval(() => {
       if (realtimeHealthy) return
       void listPayments().then((next) => {
-        setPayments(next)
-        setActivePayment((current) => current ? next.find((item) => item.reference === current.reference) ?? current : current)
+        setPayments((current) => mergePaymentSnapshot(current, next))
+        setActivePayment((current) => {
+          if (!current) return current
+          const nextPayment = next.find((item) => item.reference === current.reference)
+          return nextPayment ? mergePayment(current, nextPayment) : current
+        })
       }).catch(() => { /* the next interval retries without replacing the snapshot */ })
     }, 15000)
     return () => window.clearInterval(interval)
-  }, [user, realtimeHealthy])
-  const paidPayment = (payment: Payment) => { setActivePayment(payment); setPayments((current) => { const next = current.map((item) => item.id === payment.id || item.reference === payment.reference ? payment : item); savePayments(next); return next }) }
+  }, [userId, realtimeHealthy])
+  useEffect(() => {
+    if (!userId || isDemoMode) return
+    let active = true
+    const resync = () => {
+      void listPayments().then((next) => {
+        if (!active) return
+        setPayments((current) => mergePaymentSnapshot(current, next))
+        setActivePayment((current) => {
+          if (!current) return current
+          const nextPayment = next.find((item) => item.reference === current.reference)
+          return nextPayment ? mergePayment(current, nextPayment) : current
+        })
+      }).catch(() => { /* transient focus/network failure; next event or focus retries */ })
+    }
+    const onPageShow = () => resync()
+    const onVisibilityChange = () => { if (document.visibilityState === 'visible') resync() }
+    window.addEventListener('pageshow', onPageShow)
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      active = false
+      window.removeEventListener('pageshow', onPageShow)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
+  }, [userId])
+  const paidPayment = (payment: Payment) => { setActivePayment((current) => current ? mergePayment(current, payment) : payment); setPayments((current) => { const next = upsertPayment(current, payment); savePayments(next); return next }) }
   const simulatorReference = isDemoMode ? path.match(/^\/dev\/mock-payment\/([^/]+)/)?.[1] : undefined
   if (simulatorReference) return <MockSimulator reference={decodeURIComponent(simulatorReference)} payments={payments} onComplete={(payment) => { paidPayment(payment); window.history.pushState({}, '', '/'); setPath('/') }} />
   if (authLoading) return <div className="login-shell"><div className="login-form-panel"><div className="login-form-wrap"><div className="eyebrow">ACCESO AL SISTEMA</div><h2>Validando sesión…</h2></div></div></div>
@@ -112,7 +146,7 @@ function App() {
   const newCharge = () => { setActivePayment(null); setSection('cashier') }
   const cancelledPayment = (payment: Payment) => {
     setPayments((current) => upsertPayment(current, payment))
-    setActivePayment(payment)
+    setActivePayment((current) => current ? mergePayment(current, payment) : payment)
   }
 
    return <div className="app-shell"><Sidebar user={user} section={section} onNavigate={(next) => { setSection(next); setActivePayment(null) }} onLogout={logout} open={mobileMenu} onClose={() => setMobileMenu(false)} />
@@ -123,7 +157,7 @@ function upsertPayment(current: Payment[], next: Payment): Payment[] {
   const index = current.findIndex((item) => item.id === next.id || item.reference === next.reference)
   if (index < 0) return [next, ...current]
   const previous = current[index]
-  const merged = { ...next, createdBy: previous.createdBy || next.createdBy }
+  const merged = mergePayment(previous, next)
   return current.map((item, itemIndex) => itemIndex === index ? merged : item)
 }
 

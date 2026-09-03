@@ -67,14 +67,17 @@ insert into public.payment_updates (id, reference, changed_at)
 
 do $$
 begin
-  if exists (select 1 from pg_publication where pubname = 'supabase_realtime')
-     and not exists (
-       select 1
-       from pg_publication p
-       join pg_publication_rel pr on pr.prpubid = p.oid
-       where p.pubname = 'supabase_realtime'
-         and pr.prrelid = 'public.payment_updates'::regclass
-     ) then
+  if not exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
+    raise exception 'Required publication supabase_realtime does not exist; enable Supabase Realtime before applying this migration';
+  end if;
+
+  if not exists (
+    select 1
+    from pg_publication p
+    join pg_publication_rel pr on pr.prpubid = p.oid
+    where p.pubname = 'supabase_realtime'
+      and pr.prrelid = 'public.payment_updates'::regclass
+  ) then
     alter publication supabase_realtime add table public.payment_updates;
   end if;
 end;

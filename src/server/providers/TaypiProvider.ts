@@ -131,58 +131,69 @@ export class TaypiProvider implements PaymentProvider {
     const timestamp = String(this.now());
     const signaturePayload = [timestamp, method, path, body].join('\n');
     const signature = createHmac('sha256', this.config.secretKey).update(signaturePayload, 'utf8').digest('hex');
-    const controller = typeof AbortController === 'undefined' ? undefined : new AbortController();
-    const timeout = controller ? setTimeout(() => controller.abort(), this.timeoutMs) : undefined;
-
-    try {
-      const headers: Record<string, string> = {
-        Accept: 'application/json',
-        Authorization: `Bearer ${this.config.publicKey}`,
-        'Taypi-Signature': signature,
-        'Taypi-Timestamp': timestamp,
-      };
-      if (method === 'POST') {
-        headers['Content-Type'] = 'application/json';
-        headers['Idempotency-Key'] = idempotencyKey ?? `catolica:${createHash('sha256').update(signaturePayload).digest('hex')}`;
-      }
-
-      let response: Response;
-      try {
-        response = await this.fetchImpl(`${this.baseUrl}${path}`, {
-          method,
-          headers,
-          ...(method === 'POST' ? { body } : {}),
-          ...(controller ? { signal: controller.signal } : {}),
-        });
-      } catch (error) {
-        const message = error instanceof Error && error.name === 'AbortError' ? 'request timed out' : error instanceof Error ? error.message : 'unknown error';
-        throw new ProviderError(`Taypi request failed: ${message}`, 502, 'PROVIDER_UNAVAILABLE');
-      }
-
-      const responseBody = await response.text();
-      let parsed: unknown;
-      try {
-        parsed = responseBody ? JSON.parse(responseBody) : {};
-      } catch {
-        throw new ProviderError('Taypi API returned invalid JSON', response.status || 502, 'PROVIDER_INVALID_RESPONSE');
-      }
-
-      if (!response.ok) {
-        const errorBody = parsed && typeof parsed === 'object' ? parsed as TaypiPayment : {};
-        const code = stringValue(errorBody.code) || 'PROVIDER_HTTP_ERROR';
-        const message = stringValue(errorBody.message) || `Taypi API error (${response.status})`;
-        throw new ProviderError(`Taypi API error: ${message}`, response.status, code);
-      }
-
-      const envelope = parsed && typeof parsed === 'object' ? parsed as TaypiPayment : {};
-      const data = envelope.data;
-      if (!data || typeof data !== 'object' || Array.isArray(data)) {
-        throw new ProviderError('Taypi API response missing data', response.status || 502, 'PROVIDER_INVALID_RESPONSE');
-      }
-      return data as TaypiPayment;
-    } finally {
-      if (timeout !== undefined) clearTimeout(timeout);
+    const headers: Record<string, string> = {
+      Accept: 'application/json',
+      Authorization: `Bearer ${this.config.publicKey}`,
+      'Taypi-Signature': signature,
+      'Taypi-Timestamp': timestamp,
+    };
+    if (method === 'POST') {
+      headers['Content-Type'] = 'application/json';
+      headers['Idempotency-Key'] = idempotencyKey ?? `catolica:${createHash('sha256').update(signaturePayload).digest('hex')}`;
     }
+
+    const maxAttempts = 3;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      const controller = typeof AbortController === 'undefined' ? undefined : new AbortController();
+      const timeout = controller ? setTimeout(() => controller.abort(), this.timeoutMs) : undefined;
+      try {
+        let response: Response;
+        try {
+          response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+            method,
+            headers,
+            ...(method === 'POST' ? { body } : {}),
+            ...(controller ? { signal: controller.signal } : {}),
+          });
+        } catch (error) {
+          if (attempt < maxAttempts - 1) {
+            await waitBeforeRetry(undefined, attempt);
+            continue;
+          }
+          const message = error instanceof Error && error.name === 'AbortError' ? 'request timed out' : error instanceof Error ? error.message : 'unknown error';
+          throw new ProviderError(`Taypi request failed: ${message}`, 502, 'PROVIDER_UNAVAILABLE');
+        }
+
+        const responseBody = await response.text();
+        let parsed: unknown;
+        try {
+          parsed = responseBody ? JSON.parse(responseBody) : {};
+        } catch {
+          throw new ProviderError('Taypi API returned invalid JSON', response.status || 502, 'PROVIDER_INVALID_RESPONSE');
+        }
+
+        if (!response.ok) {
+          if (isRetryableStatus(response.status) && attempt < maxAttempts - 1) {
+            await waitBeforeRetry(response, attempt);
+            continue;
+          }
+          const errorBody = parsed && typeof parsed === 'object' ? parsed as TaypiPayment : {};
+          const code = stringValue(errorBody.code) || 'PROVIDER_HTTP_ERROR';
+          const message = stringValue(errorBody.message) || `Taypi API error (${response.status})`;
+          throw new ProviderError(`Taypi API error: ${message}`, response.status, code);
+        }
+
+        const envelope = parsed && typeof parsed === 'object' ? parsed as TaypiPayment : {};
+        const data = envelope.data;
+        if (!data || typeof data !== 'object' || Array.isArray(data)) {
+          throw new ProviderError('Taypi API response missing data', response.status || 502, 'PROVIDER_INVALID_RESPONSE');
+        }
+        return data as TaypiPayment;
+      } finally {
+        if (timeout !== undefined) clearTimeout(timeout);
+      }
+    }
+    throw new ProviderError('Taypi request failed after retries', 502, 'PROVIDER_UNAVAILABLE');
   }
 
   private mapPayment(data: TaypiPayment, fallbackExpiresAt?: string): ProviderPayment {
@@ -191,6 +202,7 @@ export class TaypiProvider implements PaymentProvider {
 
     const qrImage = normalizeQrImage(data.qr_image ?? data.qr_code);
     const checkoutUrl = stringValue(data.checkout_url) || undefined;
+    const checkoutToken = stringValue(data.checkout_token) || stringValue(data.checkoutToken) || undefined;
     const expiresAt = stringValue(data.expires_at) || fallbackExpiresAt;
     const rawStatus = stringValue(data.status).toLowerCase();
     const status = mapPaymentStatus(rawStatus, stringValue(data.event));
@@ -206,6 +218,7 @@ export class TaypiProvider implements PaymentProvider {
       eventId: stringValue(data.event_id) || undefined,
       paidAt: stringValue(data.paid_at) || undefined,
       checkoutUrl,
+      checkoutToken,
       qrCode: qrImage,
       expiresAt,
       providerData: data,
@@ -289,4 +302,17 @@ function verifyWebhookSignature(secret: string, body: string, supplied: string):
   const expectedBytes = Buffer.from(expected, 'hex');
   const suppliedBytes = Buffer.from(normalized, 'hex');
   return expectedBytes.length === suppliedBytes.length && timingSafeEqual(expectedBytes, suppliedBytes);
+}
+
+function isRetryableStatus(status: number): boolean {
+  return status === 408 || status === 425 || status === 429 || status >= 500;
+}
+
+async function waitBeforeRetry(response: Response | undefined, attempt: number): Promise<void> {
+  const retryAfter = response?.headers?.get('retry-after');
+  const retryAfterMs = retryAfter && /^\d+(?:\.\d+)?$/.test(retryAfter)
+    ? Math.min(5_000, Math.max(0, Number(retryAfter) * 1_000))
+    : Math.min(2_000, 250 * (2 ** attempt));
+  if (retryAfterMs <= 0) return;
+  await new Promise<void>((resolve) => setTimeout(resolve, retryAfterMs));
 }

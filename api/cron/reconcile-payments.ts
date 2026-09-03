@@ -20,7 +20,9 @@ export default async function handler(request: ApiRequest, response: ApiResponse
     assertCronSecret(request);
     const { service } = paymentContext();
     const result = await service.reconcilePendingPayments();
-    response.status(200).json({
+    // Expose partial failures to the scheduler/monitoring system so a later
+    // invocation retries rows that could not be reconciled.
+    response.status(result.errors > 0 ? 503 : 200).json({
       ok: true,
       inspected: result.inspected,
       reconciled: result.reconciled,

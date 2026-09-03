@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { PaymentProvider } from '../providers/PaymentProvider';
+import { ProviderError, type PaymentProvider } from '../providers/PaymentProvider';
 import type { PaymentRepository } from '../repositories/PaymentRepository';
 import type { Payment, PaymentEvent, VerifiedWebhook } from './types';
 import { generateReference } from './reference';
@@ -14,6 +14,8 @@ export interface PaymentServiceOptions {
   maxAmountCents?: number;
   /** Maximum pending rows inspected by one reconciliation pass. */
   reconcileLimit?: number;
+  /** Bounded provider concurrency for one reconciliation pass. */
+  reconcileConcurrency?: number;
 }
 
 export interface CreatedPayment {
@@ -34,13 +36,17 @@ export class PaymentService {
   private readonly expiryMinutes: number;
   private readonly maxAmountCents: number;
   private readonly reconcileLimit: number;
+  private readonly reconcileConcurrency: number;
 
   constructor(private readonly options: PaymentServiceOptions) {
     this.now = options.now ?? (() => new Date());
     this.makeReference = options.reference ?? (() => generateReference(this.now()));
     this.expiryMinutes = options.expiryMinutes ?? 15;
     this.maxAmountCents = options.maxAmountCents ?? 1_000_000;
-    this.reconcileLimit = options.reconcileLimit ?? 200;
+    // Keep one scheduled pass bounded. A later pass continues with the
+    // remaining rows, while idempotent RPCs make overlapping passes safe.
+    this.reconcileLimit = options.reconcileLimit ?? 25;
+    this.reconcileConcurrency = Math.min(8, Math.max(1, options.reconcileConcurrency ?? 4));
   }
 
   async createDigitalPayment(input: { amountCents: number; createdBy?: string | null }): Promise<CreatedPayment> {
@@ -53,14 +59,21 @@ export class PaymentService {
       amountCents: input.amountCents, currency: 'PEN', reference,
       createdBy: input.createdBy ?? null, expiresAt: expiresAt.toISOString(),
     });
-    const payment: Payment = {
-      id: randomUUID(), reference, amountCents: input.amountCents, currency: 'PEN',
-      provider: provider.name, providerPaymentId: providerPayment.providerPaymentId,
-      status: 'PENDING', createdBy: input.createdBy ?? null, createdAt: createdAt.toISOString(),
-      expiresAt: providerPayment.expiresAt ?? expiresAt.toISOString(), paidAt: null, cancelledAt: null,
-      providerData: providerPayment.providerData ?? {},
-    };
+    let payment: Payment;
     try {
+      validateCreatedProviderPayment(providerPayment, {
+        provider: provider.name,
+        reference,
+        amountCents: input.amountCents,
+        currency: 'PEN',
+      });
+      payment = {
+        id: randomUUID(), reference, amountCents: input.amountCents, currency: 'PEN',
+        provider: provider.name, providerPaymentId: providerPayment.providerPaymentId,
+        status: 'PENDING', createdBy: input.createdBy ?? null, createdAt: createdAt.toISOString(),
+        expiresAt: providerPayment.expiresAt ?? expiresAt.toISOString(), paidAt: null, cancelledAt: null,
+        providerData: providerPayment.providerData ?? {},
+      };
       await this.options.repository.insert(payment);
     } catch (error) {
       // External checkout already exists. Best-effort cancellation prevents an
@@ -122,18 +135,18 @@ export class PaymentService {
     await this.expirePayments(this.now());
     const pending = await this.options.repository.list({ status: 'PENDING', provider: provider.name, limit: this.reconcileLimit });
     const summary: ReconciliationSummary = { inspected: pending.length, reconciled: 0, skipped: 0, errors: 0, payments: [] };
-    for (const payment of pending) {
-      if (!payment.providerPaymentId) { summary.skipped += 1; continue; }
+    const reconcileOne = async (payment: Payment): Promise<{ kind: 'reconciled' | 'skipped' | 'error'; payment?: Payment }> => {
+      if (!payment.providerPaymentId) return { kind: 'skipped' };
       try {
         const state = await provider.getPayment(payment.providerPaymentId);
         if (state.providerPaymentId !== payment.providerPaymentId || !state.reference || state.reference !== payment.reference) {
-          summary.skipped += 1; continue;
+          return { kind: 'skipped' };
         }
         if (!Number.isSafeInteger(state.amountCents) || state.amountCents !== payment.amountCents || state.currency !== payment.currency) {
-          summary.skipped += 1; continue;
+          return { kind: 'skipped' };
         }
         if (!isTerminalStatus(state.status)) {
-          summary.skipped += 1; continue;
+          return { kind: 'skipped' };
         }
         const eventId = normalizeReconciliationEventId(state.eventId, provider.name, state.providerPaymentId);
         const result = await this.processWebhook({
@@ -154,11 +167,18 @@ export class PaymentService {
             status: state.status,
           },
         });
-        if (result.changed) { summary.reconciled += 1; summary.payments.push(result.payment); }
-        else summary.skipped += 1;
+        return result.changed ? { kind: 'reconciled', payment: result.payment } : { kind: 'skipped' };
       } catch (error) {
-        summary.errors += 1;
         console.error('Payment reconciliation failed', payment.id, error instanceof Error ? error.message : 'unknown error');
+        return { kind: 'error' };
+      }
+    };
+    for (let offset = 0; offset < pending.length; offset += this.reconcileConcurrency) {
+      const outcomes = await Promise.all(pending.slice(offset, offset + this.reconcileConcurrency).map(reconcileOne));
+      for (const outcome of outcomes) {
+        if (outcome.kind === 'reconciled' && outcome.payment) { summary.reconciled += 1; summary.payments.push(outcome.payment); }
+        else if (outcome.kind === 'error') summary.errors += 1;
+        else summary.skipped += 1;
       }
     }
     return summary;
@@ -288,6 +308,27 @@ export class PaymentService {
   private digitalProvider(): PaymentProvider {
     if (!this.options.provider) throw new Error('Digital payment provider is not configured');
     return this.options.provider;
+  }
+}
+
+function validateCreatedProviderPayment(
+  providerPayment: Awaited<ReturnType<PaymentProvider['createPayment']>>,
+  expected: { provider: string; reference: string; amountCents: number; currency: string },
+): void {
+  if (!providerPayment || typeof providerPayment.providerPaymentId !== 'string' || !providerPayment.providerPaymentId.trim()) {
+    throw new ProviderError(`${expected.provider} response missing payment ID`, 502, 'PROVIDER_INVALID_RESPONSE');
+  }
+  if (providerPayment.amountCents !== expected.amountCents) {
+    throw new ProviderError(`${expected.provider} response amount mismatch`, 502, 'PROVIDER_INVALID_RESPONSE');
+  }
+  if (providerPayment.currency?.toUpperCase() !== expected.currency) {
+    throw new ProviderError(`${expected.provider} response currency mismatch`, 502, 'PROVIDER_INVALID_RESPONSE');
+  }
+  if (providerPayment.reference !== expected.reference) {
+    throw new ProviderError(`${expected.provider} response reference mismatch`, 502, 'PROVIDER_INVALID_RESPONSE');
+  }
+  if (providerPayment.status && providerPayment.status !== 'PENDING') {
+    throw new ProviderError(`${expected.provider} returned an unexpected creation status`, 502, 'PROVIDER_INVALID_RESPONSE');
   }
 }
 

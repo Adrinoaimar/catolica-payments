@@ -28,4 +28,4 @@ Si el smoke test falla, cambie `PAYMENT_PROVIDER` a `mock` solo en Preview o des
 
 ## Scheduler
 
-El cron de `vercel.json` usa cada cinco minutos. Si el plan Vercel limita esa frecuencia, invoque `/api/cron/reconcile-payments` desde Supabase Cron/`pg_cron` o un scheduler externo con el mismo secreto. El webhook firmado sigue siendo la autoridad y el cron solo reconcilia estados consultados server-side.
+El cron de `vercel.json` usa cada cinco minutos. Si el plan Vercel limita esa frecuencia, invoque `/api/cron/reconcile-payments` desde Supabase Cron/`pg_cron` o un scheduler externo con el mismo secreto. El endpoint devuelve `503` si alguna operación no pudo reconciliarse, para que el scheduler/monitorización lo detecte. El webhook firmado sigue siendo la autoridad y el cron solo reconcilia estados consultados server-side; cada pasada está limitada a 25 pendientes y cuatro solicitudes simultáneas.

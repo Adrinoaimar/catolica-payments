@@ -88,7 +88,9 @@ export abstract class HttpPaymentProvider implements PaymentProvider {
     const providerPaymentId = String(data.provider_payment_id ?? data.payment_id ?? data.id ?? '');
     const reference = String(data.reference ?? data.external_reference ?? '');
     const eventId = String(data.event_id ?? data.idempotency_key ?? data.id ?? '');
-    const amountCents = Number(data.amount_cents ?? (typeof data.amount === 'number' ? Math.round(data.amount * 100) : NaN));
+    const amountCents = data.amount_cents !== undefined
+      ? providerCents(data.amount_cents) ?? NaN
+      : providerAmount(data.amount) ?? NaN;
     const currency = String(data.currency ?? 'PEN');
     const status = String(data.status ?? '').toUpperCase();
     if (!providerPaymentId || !reference || !eventId || !Number.isSafeInteger(amountCents) || !['PAID', 'FAILED', 'EXPIRED', 'CANCELLED'].includes(status)) {

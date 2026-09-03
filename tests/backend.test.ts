@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { InMemoryPaymentRepository, MockPaymentProvider, PaymentService, centsToSoles, generateReference, solesToCents } from '../src/server';
+import { InMemoryPaymentRepository, MockPaymentProvider, PaymentService, centsToSoles, generateReference, solesToCents, type PaymentProvider } from '../src/server';
 
 function setup() {
   const repository = new InMemoryPaymentRepository();
@@ -89,5 +89,24 @@ describe('payment domain', () => {
     expect(cash.status).toBe('PAID');
     expect((await repository.findById(cash.id))?.paidAt).toBe(cash.createdAt);
     expect(repository.events.size).toBe(1);
+  });
+
+  it('fails closed when a provider returns an inconsistent checkout', async () => {
+    const repository = new InMemoryPaymentRepository();
+    const provider: PaymentProvider = {
+      name: 'fixture',
+      async createPayment(input) {
+        return {
+          providerPaymentId: 'fixture-1', status: 'PENDING', amountCents: input.amountCents + 1,
+          currency: 'PEN', reference: input.reference,
+        };
+      },
+      async getPayment() { throw new Error('not used'); },
+      async verifyWebhook() { throw new Error('not used'); },
+      async cancelPayment() {},
+    };
+    const service = new PaymentService({ repository, provider, now: () => new Date('2026-09-02T12:00:00.000Z') });
+    await expect(service.createDigitalPayment({ amountCents: 3000 })).rejects.toMatchObject({ code: 'PROVIDER_INVALID_RESPONSE' });
+    expect(repository.payments.size).toBe(0);
   });
 });
