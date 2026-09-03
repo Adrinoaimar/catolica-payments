@@ -50,6 +50,9 @@ begin
 end;
 $$;
 
+revoke all on function public.refresh_payment_update() from public, anon, authenticated;
+grant execute on function public.refresh_payment_update() to service_role;
+
 drop trigger if exists payments_realtime_projection on public.payments;
 create trigger payments_realtime_projection
   after insert or update or delete on public.payments
