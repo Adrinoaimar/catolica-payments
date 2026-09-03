@@ -40,7 +40,10 @@ export default async function handler(request: ApiRequest & Partial<AsyncIterabl
     });
     response.status(200).json({ ok: true, changed: result.changed, payment: publicPayment(result.payment as Payment) });
   } catch (error) {
-    if (client && rawBody && receiptEventId) {
+    // Do not let unauthenticated traffic turn the audit table into a write
+    // amplification target. Only deliveries that passed provider signature
+    // and timestamp verification are eligible for a durable receipt.
+    if (client && rawBody && receiptEventId && !isSignatureFailure(error)) {
       const errorCode = error && typeof error === 'object' && 'code' in error ? String((error as { code?: unknown }).code) : 'WEBHOOK_ERROR';
       await recordWebhookReceipt(client, {
         provider: providerName,
@@ -100,4 +103,9 @@ function isReceiptRejection(error: unknown): boolean {
     : '';
   if (['INVALID_SIGNATURE', 'INVALID_WEBHOOK', 'P0002', '22023'].includes(code)) return true;
   return error instanceof Error && /not found|mismatch|invalid|payable/i.test(error.message);
+}
+
+function isSignatureFailure(error: unknown): boolean {
+  if (error instanceof ProviderError && error.code === 'INVALID_SIGNATURE') return true;
+  return error instanceof Error && /signature|timestamp/i.test(error.message);
 }

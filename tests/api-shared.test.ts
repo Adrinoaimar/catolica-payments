@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseBody, parseRequestAmount, parseIdempotencyKey, publicPayment, fallbackWebhookEventId, recordWebhookReceipt } from '../api/_shared';
+import { parseFilters, restrictFiltersForRole } from '../api/payments';
 
 describe('server API input and response boundaries', () => {
   it('accepts integer cents or decimal soles, rejects ambiguous amounts', () => {
@@ -52,5 +53,17 @@ describe('server API input and response boundaries', () => {
     expect(calls[0].row.body_sha256).toMatch(/^[a-f0-9]{64}$/);
     expect(calls[0].row).not.toHaveProperty('raw_payload');
     expect(calls[0].options).toBeUndefined();
+  });
+
+  it('limits cashier ledger queries to the current Lima calendar day', () => {
+    const filters = parseFilters({ from: '2020-01-01T00:00:00.000Z', to: '2020-01-02T00:00:00.000Z' }, 'CASHIER');
+    const restricted = restrictFiltersForRole(filters, 'CASHIER');
+    expect(restricted.from).not.toBe('2020-01-01T00:00:00.000Z');
+    expect(restricted.to).toBe('2020-01-02T00:00:00.000Z');
+  });
+
+  it('validates bounded ledger pagination', () => {
+    expect(parseFilters({ limit: '200', offset: '400' }, 'ADMIN')).toMatchObject({ limit: 200, offset: 400 });
+    expect(() => parseFilters({ offset: '50001' }, 'ADMIN')).toThrow('offset must be between');
   });
 });

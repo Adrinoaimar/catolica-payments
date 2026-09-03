@@ -30,7 +30,9 @@ export class SupabasePaymentRepository implements PaymentRepository {
     if (filters.to) query = query.lte('created_at', filters.to);
     if (filters.minAmountCents !== undefined) query = query.gte('amount_cents', filters.minAmountCents);
     if (filters.maxAmountCents !== undefined) query = query.lte('amount_cents', filters.maxAmountCents);
-    query = query.limit(filters.limit ?? 100);
+    const limit = filters.limit ?? 100;
+    const offset = filters.offset ?? 0;
+    query = query.range(offset, offset + limit - 1);
     const { data, error } = await query;
     if (error) throw error;
     return (data ?? []).map((row: Row) => this.fromRow(row));
@@ -64,8 +66,13 @@ export class SupabasePaymentRepository implements PaymentRepository {
     return this.fromRow(result.payment);
   }
 
-  async listPendingExpired(now: string): Promise<Payment[]> {
-    const { data, error } = await this.client.from('payments').select('*').eq('status', 'PENDING').not('expires_at', 'is', null).lte('expires_at', now);
+  async listPendingExpired(now: string, limit: number): Promise<Payment[]> {
+    const { data, error } = await this.client.from('payments').select('*')
+      .eq('status', 'PENDING')
+      .not('expires_at', 'is', null)
+      .lte('expires_at', now)
+      .order('expires_at', { ascending: true })
+      .limit(limit);
     if (error) throw error;
     return (data ?? []).map((row: Row) => this.fromRow(row));
   }

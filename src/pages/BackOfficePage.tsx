@@ -42,6 +42,7 @@ export function BackOfficePage({ section, payments, user, onNew, onOpenPayment }
   const [visiblePayments, setVisiblePayments] = useState<Payment[]>(payments)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const availablePeriods = user.role === 'ADMIN' ? periodLabels : { DAY: 'Hoy' } as const
 
   const cashiers = useMemo(() => Array.from(new Set(payments.map((payment) => payment.createdBy).filter(Boolean))).sort((a, b) => a.localeCompare(b)), [payments])
   const parsedAmounts = useMemo(() => ({ min: parseSolesFilter(minAmount), max: parseSolesFilter(maxAmount) }), [minAmount, maxAmount])
@@ -99,7 +100,7 @@ export function BackOfficePage({ section, payments, user, onNew, onOpenPayment }
   const total = paid.reduce((sum, payment) => sum + payment.amountCents, 0)
 
   const reportToolbar = <>
-    <div className="report-filter-group"><label htmlFor="report-period">Periodo</label><select id="report-period" value={period} onChange={(event) => setPeriod(event.target.value as ReportPeriod)}>{Object.entries(periodLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></div>
+    <div className="report-filter-group"><label htmlFor="report-period">Periodo</label><select id="report-period" value={period} onChange={(event) => setPeriod(event.target.value as ReportPeriod)}>{Object.entries(availablePeriods).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></div>
     {period === 'CUSTOM' && <><div className="report-filter-group"><label htmlFor="report-from">Desde</label><input id="report-from" type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} /></div><div className="report-filter-group"><label htmlFor="report-to">Hasta</label><input id="report-to" type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} /></div></>}
     <div className="report-filter-group"><label htmlFor="report-status">Estado</label><select id="report-status" value={status} onChange={(event) => setStatus(event.target.value as typeof status)}><option value="ALL">Todos</option><option value="PAID">Pagados</option><option value="PENDING">Pendientes</option><option value="FAILED">Fallidos</option><option value="EXPIRED">Vencidos</option><option value="CANCELLED">Cancelados</option></select></div>
     <div className="report-filter-group"><label htmlFor="report-method">Método</label><select id="report-method" value={method} onChange={(event) => setMethod(event.target.value as typeof method)}><option value="ALL">Todos</option><option value="DIGITAL">Digital</option><option value="CASH">Efectivo</option></select></div>

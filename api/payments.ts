@@ -29,9 +29,14 @@ export default async function handler(request: ApiRequest, response: ApiResponse
       const repository = paymentRepository(client);
       // Expiration is enforced server-side even when no scheduled job has run.
       await service.expirePayments();
-      const filters = parseFilters(request.query, user.role);
+      const filters = restrictFiltersForRole(parseFilters(request.query, user.role), user.role);
       const payments = await repository.list(filters);
-      response.status(200).json({ payments: payments.map(publicPayment), count: payments.length });
+      response.status(200).json({
+        payments: payments.map(publicPayment),
+        count: payments.length,
+        offset: filters.offset ?? 0,
+        hasMore: payments.length === filters.limit,
+      });
       return;
     }
 
@@ -75,6 +80,9 @@ export function parseFilters(query: ApiRequest['query'], role: 'ADMIN' | 'CASHIE
   const rawLimit = optionalQuery(query, 'limit');
   const limit = rawLimit === undefined ? 100 : Number(rawLimit);
   if (!Number.isInteger(limit) || limit < 1 || limit > 200) throw new HttpError(400, 'limit must be between 1 and 200');
+  const rawOffset = optionalQuery(query, 'offset');
+  const offset = rawOffset === undefined ? 0 : Number(rawOffset);
+  if (!Number.isInteger(offset) || offset < 0 || offset > 50_000) throw new HttpError(400, 'offset must be between 0 and 50000');
   return {
     ...(status ? { status: status as PaymentStatus } : {}),
     ...(method ? { method: method as PaymentMethod } : {}),
@@ -85,7 +93,29 @@ export function parseFilters(query: ApiRequest['query'], role: 'ADMIN' | 'CASHIE
     ...(minAmountCents !== undefined ? { minAmountCents } : {}),
     ...(maxAmountCents !== undefined ? { maxAmountCents } : {}),
     limit,
+    ...(rawOffset === undefined ? {} : { offset }),
   };
+}
+
+/** Cashiers are limited to the institution's current Lima calendar day. */
+export function restrictFiltersForRole<T extends ReturnType<typeof parseFilters>>(filters: T, role: 'ADMIN' | 'CASHIER'): T {
+  if (role === 'ADMIN') return filters;
+  const { from: todayFrom, to: todayTo } = limaTodayRange();
+  const from = filters.from && filters.from > todayFrom ? filters.from : todayFrom;
+  const to = filters.to && filters.to < todayTo ? filters.to : todayTo;
+  return { ...filters, from, to };
+}
+
+function limaTodayRange(now = new Date()): { from: string; to: string } {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Lima', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(now);
+  const values = Object.fromEntries(parts.filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]));
+  // Peru uses UTC-05:00. Constructing in UTC at 05:00 avoids server-local
+  // timezone dependence while preserving the Lima calendar boundaries.
+  const start = new Date(Date.UTC(Number(values.year), Number(values.month) - 1, Number(values.day), 5, 0, 0, 0));
+  const end = new Date(start.getTime() + 24 * 60 * 60_000 - 1);
+  return { from: start.toISOString(), to: end.toISOString() };
 }
 
 function optionalQuery(query: ApiRequest['query'], key: string): string | undefined {

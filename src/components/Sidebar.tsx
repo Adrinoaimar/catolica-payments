@@ -12,12 +12,13 @@ export function Sidebar({ user, section, onNavigate, onLogout, open = false, onC
     { key: 'operations', label: 'Operaciones', icon: ReceiptIcon },
     { key: 'reports', label: 'Reportes', icon: ChartIcon },
   ]
+  const visibleLinks = user.role === 'ADMIN' ? links : links.filter(({ key }) => key !== 'reports')
   return <>
     {open && <button className="sidebar-overlay" aria-label="Cerrar menú" onClick={onClose} />}
     <aside className={`sidebar ${open ? 'sidebar--open' : ''}`}>
       <div className="sidebar-top"><BrandMark /><button className="sidebar-close" onClick={onClose} aria-label="Cerrar menú"><CloseIcon size={20} /></button></div>
       <div className="sidebar-section-label">MENÚ PRINCIPAL</div>
-      <nav className="sidebar-nav">{links.map(({ key, label, icon: Icon }) => <button key={key} className={`sidebar-link ${section === key ? 'sidebar-link--active' : ''}`} onClick={() => { onNavigate(key); onClose?.() }}><Icon size={19} /><span>{label}</span>{key === 'cashier' && <i className="sidebar-link__new">+ Nuevo</i>}</button>)}</nav>
+      <nav className="sidebar-nav">{visibleLinks.map(({ key, label, icon: Icon }) => <button key={key} className={`sidebar-link ${section === key ? 'sidebar-link--active' : ''}`} onClick={() => { onNavigate(key); onClose?.() }}><Icon size={19} /><span>{label}</span>{key === 'cashier' && <i className="sidebar-link__new">+ Nuevo</i>}</button>)}</nav>
       <div className="sidebar-divider" />
       <div className="sidebar-section-label">CONFIGURACIÓN</div>
       <nav className="sidebar-nav">{user.role === 'ADMIN' && <button className={'sidebar-link ' + (section === 'settings' ? 'sidebar-link--active' : '')} onClick={() => { onNavigate('settings'); onClose?.() }}><SettingsIcon size={19} /><span>Administración</span></button>}<button className="sidebar-link"><BellIcon size={19} /><span>Notificaciones</span><b className="notification-count">2</b></button></nav>

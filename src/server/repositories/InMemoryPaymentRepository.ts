@@ -55,7 +55,8 @@ export class InMemoryPaymentRepository implements PaymentRepository {
       .filter((payment) => filters.maxAmountCents === undefined || payment.amountCents <= filters.maxAmountCents)
       .filter((payment) => { const time = new Date(payment.createdAt).getTime(); return time >= from && time <= to; })
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-    return values.slice(0, filters.limit ?? 100).map((payment) => structuredClone(payment));
+    const offset = filters.offset ?? 0;
+    return values.slice(offset, offset + (filters.limit ?? 100)).map((payment) => structuredClone(payment));
   }
 
   async findEventByProviderEventId(providerEventId: string, provider?: string): Promise<PaymentEvent | null> {
@@ -94,9 +95,11 @@ export class InMemoryPaymentRepository implements PaymentRepository {
     });
   }
 
-  async listPendingExpired(now: string): Promise<Payment[]> {
+  async listPendingExpired(now: string, limit: number): Promise<Payment[]> {
     return [...this.payments.values()]
       .filter((payment) => payment.status === 'PENDING' && payment.expiresAt && payment.expiresAt <= now)
+      .sort((a, b) => (a.expiresAt ?? '').localeCompare(b.expiresAt ?? ''))
+      .slice(0, limit)
       .map((payment) => structuredClone(payment));
   }
 

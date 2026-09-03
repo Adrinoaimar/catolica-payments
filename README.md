@@ -33,13 +33,26 @@ copy .env.example .env.local
 
 En macOS/Linux, use `cp .env.example .env.local`. Complete `VITE_SUPABASE_URL` y `VITE_SUPABASE_ANON_KEY` para el navegador, además de `SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY` para las funciones serverless; no confirme secretos en Git.
 
-La sesión del navegador usa Supabase Auth (Email/Password), persiste mediante el cliente oficial y envía `Authorization: Bearer <access_token>` a cada endpoint protegido. Cada usuario debe tener una fila en `public.user_roles` con rol `ADMIN` o `CASHIER`; el frontend no acepta el rol desde metadata para autorizar operaciones. Las rutas mock se bloquean tanto en Production como en Preview de Vercel, aunque alguien configure `PAYMENT_PROVIDER=mock` por error.
+La sesión del navegador usa Supabase Auth (Email/Password), persiste mediante el cliente oficial y envía `Authorization: Bearer <access_token>` a cada endpoint protegido. Cada usuario debe tener una fila en `public.user_roles` con rol `ADMIN` o `CASHIER`; el frontend no acepta el rol desde metadata para autorizar operaciones. `ADMIN` puede consultar todo el ledger y generar reportes; `CASHIER` solo puede consultar operaciones del día calendario de Lima. Las rutas mock se bloquean tanto en Production como en Preview de Vercel, aunque alguien configure `PAYMENT_PROVIDER=mock` por error.
 
 Ejecute las migraciones de `supabase/migrations/` en el proyecto Supabase. Después inicie el entorno:
 
 ```bash
 npm run dev
 ```
+
+`npm run dev` sirve únicamente el frontend de Vite; no ejecuta las funciones de
+`api/`. Para probar localmente el flujo autenticado, los webhooks o TAYPI
+sandbox, use el runtime de Vercel con el mismo `.env.local`:
+
+```bash
+npx vercel@latest dev
+```
+
+La CLI puede pedir iniciar sesión o vincular el proyecto una sola vez. Si no se
+desea instalarla, pruebe contra un deployment de Preview/Production; una
+pestaña de Vite por sí sola devuelve el shell de la SPA para `/api/*`, no una
+respuesta JSON del backend.
 
 Scripts esperados:
 
@@ -83,7 +96,7 @@ POST /api/webhooks/mercadopago (reservado; adaptador específico pendiente)
 POST /api/webhooks/culqi (reservado; adaptador específico pendiente)
 ```
 
-Cada adaptador debe autenticar el evento, buscar la referencia, comparar monto y moneda, validar `provider_payment_id`, rechazar duplicados de forma idempotente y registrar `payment_events` dentro de una operación atómica. Responda rápido con HTTP 200 solo después de aceptar el evento; eventos inválidos deben rechazarse con el código apropiado sin modificar pagos. `webhook_receipts` conserva el identificador de entrega, hash del body, resultado y código de error para observabilidad sin duplicar payloads sensibles.
+Cada adaptador debe autenticar el evento, buscar la referencia, comparar monto y moneda, validar `provider_payment_id`, rechazar duplicados de forma idempotente y registrar `payment_events` dentro de una operación atómica. Responda rápido con HTTP 200 solo después de aceptar el evento; eventos inválidos deben rechazarse con el código apropiado sin modificar pagos. Las firmas/timestamps inválidos se rechazan antes de escribir recibos, para que tráfico no autenticado no amplifique escrituras. `webhook_receipts` conserva el identificador de entrega, hash del body, resultado y código de error para observabilidad sin duplicar payloads sensibles.
 
 Un administrador puede cancelar una operación digital `PENDING` desde la pantalla de cobro. La API `POST /api/payments/:reference/cancel` exige sesión Bearer con rol `ADMIN`, consulta el estado del proveedor antes de cancelar y registra la transición y su motivo en `payment_events` dentro de una operación atómica. Nunca puede convertir una operación terminal en `CANCELLED`.
 
@@ -92,6 +105,8 @@ Las creaciones aceptan `Idempotency-Key` (16–200 caracteres imprimibles); la A
 ### Alternativa cuando el webhook se retrasa
 
 El webhook del proveedor es el camino principal. Como respaldo, `GET /api/cron/reconcile-payments` consulta server-side el estado de cada operación `PENDING` mediante `getPayment`, vuelve a validar proveedor, referencia, monto, moneda y estado, y usa la misma transición RPC idempotente. La pantalla abierta también puede llamar `POST /api/payments/:reference/reconcile` como acción operativa excepcional, pero no consulta al proveedor cada pocos segundos: solo lee el ledger autorizado. Ninguna ruta acepta una confirmación desde el navegador. El cron se protege con `Authorization: Bearer <CRON_SECRET>` y `vercel.json` lo programa cada cinco minutos; en Vercel Hobby esa frecuencia no está disponible, por lo que debe invocarse desde Supabase Cron/`pg_cron` o un scheduler externo con `CRON_SECRET`. Vercel documenta que el secreto se entrega en el header de la invocación y que Hobby limita la frecuencia a una vez al día. [Vercel Cron](https://vercel.com/docs/cron-jobs/manage-cron-jobs)
+
+Los reportes administrativos recorren páginas de 200 filas hasta completar el periodo solicitado (con un máximo operativo de 5,000 filas por consulta de pantalla). El endpoint conserva `limit`, `offset` y `hasMore` para integraciones que necesiten paginar directamente.
 
 TAYPI también reintenta webhooks y permite reenvío manual desde su panel. La reconciliación por `GET /api/v1/payments/:payment_id` es una red de seguridad, no reemplaza la firma HMAC ni la auditoría. [SDK JavaScript de TAYPI](https://docs.taypi.pe/sdks/javascript), [Webhooks de TAYPI](https://docs.taypi.pe/webhooks)
 

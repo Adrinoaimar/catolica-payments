@@ -6,6 +6,11 @@ Esta guía separa el software verificable de las credenciales y cuentas que solo
 
 En Vercel Production configure `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `PAYMENT_PROVIDER=taypi`, `TAYPI_PUBLIC_KEY`, `TAYPI_SECRET_KEY`, `TAYPI_WEBHOOK_SECRET` y `CRON_SECRET`. Mantenga las claves privadas sin prefijo `VITE_`. Use `TAYPI_SANDBOX=true` y claves de prueba únicamente en un entorno de staging; el verificador las rechaza en producción.
 
+Configure además un límite de solicitudes por IP/usuario en Vercel WAF o en el
+gateway que publique el dominio, al menos para `POST /api/payments*`,
+`POST /api/payments/:reference/reconcile` y `/api/webhooks/*`. El repositorio
+no usa contadores en memoria como sustituto de un límite distribuido.
+
 Antes de desplegar, ejecute `npm run verify:production` con las variables cargadas. El comando solo valida presencia, forma, HTTPS y separación de secretos; nunca imprime sus valores. CI también ejecuta esta verificación con valores sintéticos para detectar regresiones, pero no sustituye validarla contra las variables reales del proyecto.
 
 ## Migraciones y Realtime
@@ -13,6 +18,13 @@ Antes de desplegar, ejecute `npm run verify:production` con las variables cargad
 Ejecute en orden todas las migraciones de `supabase/migrations/`, incluidas `20260902000002_realtime_payment_updates.sql`, `20260902000003_admin_cancellation.sql`, `20260902000004_admin_settings.sql`, `20260902000005_webhook_receipts_and_job_lock.sql`, `20260902000006_create_idempotency.sql`, `20260902000007_lock_admin_role_changes.sql`, `20260903000008_harden_webhook_identity.sql`, `20260903000009_recoverable_payment_intents.sql` y `20260903000010_realtime_delete_identity.sql`. Después cree al menos un usuario Auth y su fila `user_roles` con `ADMIN` o `CASHIER`. Verifique que el canal `payment_updates` se suscribe con sesión autenticada y que `provider_data` nunca aparece en el payload público.
 
 ## Smoke test antes de dinero real
+
+Para una prueba local que incluya las funciones serverless no basta con
+`npm run dev`: Vite solo sirve la interfaz. Ejecute `npx vercel@latest dev`
+desde el repositorio con `.env.local` configurado, o use el deployment de
+Preview. Compruebe que `GET /api/payments` devuelve JSON (con un Bearer válido)
+y que `POST /api/webhooks/taypi` llega al handler, no al fallback HTML de la
+SPA.
 
 1. Iniciar sesión como cajero y crear un cobro pequeño.
 2. Confirmar que aparece QR/checkout de Taypi y estado `PENDING`.

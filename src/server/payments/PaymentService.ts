@@ -17,6 +17,10 @@ export interface PaymentServiceOptions {
   reconcileLimit?: number;
   /** Bounded provider concurrency for one reconciliation pass. */
   reconcileConcurrency?: number;
+  /** Maximum expired rows inspected by one request or scheduled pass. */
+  expireLimit?: number;
+  /** Bounded provider concurrency for expiry verification. */
+  expireConcurrency?: number;
 }
 
 export interface CreatedPayment {
@@ -38,6 +42,8 @@ export class PaymentService {
   private readonly maxAmountCents: number;
   private readonly reconcileLimit: number;
   private readonly reconcileConcurrency: number;
+  private readonly expireLimit: number;
+  private readonly expireConcurrency: number;
 
   constructor(private readonly options: PaymentServiceOptions) {
     this.now = options.now ?? (() => new Date());
@@ -51,6 +57,8 @@ export class PaymentService {
     // continues with the remaining rows.
     this.reconcileLimit = options.reconcileLimit ?? 12;
     this.reconcileConcurrency = Math.min(8, Math.max(1, options.reconcileConcurrency ?? 4));
+    this.expireLimit = Math.min(100, Math.max(1, options.expireLimit ?? 12));
+    this.expireConcurrency = Math.min(8, Math.max(1, options.expireConcurrency ?? 4));
   }
 
   async createDigitalPayment(input: { amountCents: number; createdBy?: string | null; idempotencyKey?: string | null }): Promise<CreatedPayment> {
@@ -151,8 +159,13 @@ export class PaymentService {
 
     const now = this.now();
     if (payment.expiresAt && new Date(payment.expiresAt).getTime() <= now.getTime()) {
-      const expired = (await this.options.repository.markExpired(payment.id, now.toISOString())).payment;
-      throw new PaymentOperationError(409, expired.providerPaymentId ? 'Payment intent is no longer pending' : 'Payment intent expired; create a new payment');
+      // A missing provider ID means the previous create request may have
+      // reached the provider but lost its response. Keep this durable intent
+      // pending long enough to repeat the provider's idempotent create call;
+      // marking it EXPIRED here could strand an already-created checkout.
+      if (payment.providerPaymentId) {
+        throw new PaymentOperationError(409, 'Payment intent is no longer pending');
+      }
     }
 
     let providerPayment: ProviderPayment;
@@ -423,26 +436,26 @@ export class PaymentService {
   }
 
   async expirePayments(now = this.now()): Promise<Payment[]> {
-    const expired = await this.options.repository.listPendingExpired(now.toISOString());
+    const expired = await this.options.repository.listPendingExpired(now.toISOString(), this.expireLimit);
     const result: Payment[] = [];
-    for (const payment of expired) {
+    const expireOne = async (payment: Payment): Promise<Payment | null> => {
       // A local timer must never outrank a provider confirmation that was
       // created before the deadline. Query an attached digital checkout first;
       // transient provider failures leave the intent PENDING for retry.
       const provider = this.options.provider;
       if (provider && payment.provider === provider.name) {
-        if (!payment.providerPaymentId) continue;
+        if (!payment.providerPaymentId) return null;
         let state: ProviderPayment;
         try {
           state = await provider.getPayment(payment.providerPaymentId);
         } catch {
-          continue;
+          return null;
         }
         if (state.providerPaymentId !== payment.providerPaymentId
           || state.reference !== payment.reference
           || state.amountCents !== payment.amountCents
           || state.currency !== payment.currency) {
-          continue;
+          return null;
         }
         if (isTerminalStatus(state.status)) {
           // A provider PAID response is authoritative unless it explicitly
@@ -450,8 +463,7 @@ export class PaymentService {
           if (state.status === 'PAID' && state.paidAt && payment.expiresAt
             && new Date(state.paidAt).getTime() > new Date(payment.expiresAt).getTime()) {
             const item = await this.options.repository.markExpired(payment.id, now.toISOString());
-            result.push(item.payment);
-            continue;
+            return item.payment;
           }
           const eventId = normalizeReconciliationEventId(state.eventId, provider.name, state.providerPaymentId);
           const transitioned = await this.processWebhook({
@@ -464,17 +476,22 @@ export class PaymentService {
             status: state.status,
             payload: { source: 'server_expiry_check', provider_payment_id: state.providerPaymentId, reference: state.reference, status: state.status },
           });
-          result.push(transitioned.payment);
-          continue;
+          return transitioned.payment;
         }
-        if (state.status !== 'PENDING') continue;
+        if (state.status !== 'PENDING') return null;
       }
       // CASH and providers without an attached identity have no safe external
       // state to reconcile here. A provisional digital intent stays pending so
       // the scheduler can recover its checkout instead of orphaning it.
-      if (provider && payment.provider === provider.name && !payment.providerPaymentId) continue;
+      if (provider && payment.provider === provider.name && !payment.providerPaymentId) return null;
       const item = await this.options.repository.markExpired(payment.id, now.toISOString());
-      result.push(item.payment);
+      return item.payment;
+    };
+    for (let offset = 0; offset < expired.length; offset += this.expireConcurrency) {
+      const batch = await Promise.all(expired.slice(offset, offset + this.expireConcurrency).map(expireOne));
+      for (const payment of batch) {
+        if (payment) result.push(payment);
+      }
     }
     return result;
   }

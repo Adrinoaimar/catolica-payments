@@ -63,7 +63,7 @@ No confiar en un campo de éxito sin verificarlo contra el proveedor cuando el c
 
 - Rechazar montos `<= 0`, exceso del límite operativo, más de dos decimales o moneda inesperada.
 - Validar formato y longitud de referencias, UUID, estados y parámetros de filtros.
-- Aplicar rate limiting por usuario/IP a creación de cobros y webhooks.
+- Aplicar rate limiting por usuario/IP a creación de cobros y webhooks en el borde de producción (Vercel WAF o un gateway administrado); no usar un contador en memoria de una función serverless como control de seguridad.
 - Usar límites de tamaño de body, timeouts y protección contra replay.
 - No interpolar SQL; usar cliente parametrizado y funciones SQL revisadas.
 - Escapar contenido exportado a CSV para evitar inyección de fórmulas.

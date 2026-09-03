@@ -10,6 +10,7 @@ export interface PaymentListFilters {
   minAmountCents?: number;
   maxAmountCents?: number;
   limit?: number;
+  offset?: number;
 }
 
 export interface PaymentRepository {
@@ -28,7 +29,8 @@ export interface PaymentRepository {
     providerData: Record<string, unknown>;
     expiresAt: string | null;
   }): Promise<Payment>;
-  listPendingExpired(now: string): Promise<Payment[]>;
+  /** Return a bounded batch ordered by earliest expiry first. */
+  listPendingExpired(now: string, limit: number): Promise<Payment[]>;
   /** Must lock/check status and write the audit event in one transaction. */
   markPaidFromWebhook(input: {
     paymentId: string;

@@ -46,21 +46,31 @@ export function periodRange(period: ReportPeriod, now = new Date()): { from?: st
 /** Fetches the server-filtered public ledger. Demo mode filters the local fixture. */
 export async function fetchReportPayments(filters: PaymentReportFilters, fallback: Payment[]): Promise<Payment[]> {
   if (isDemoMode) return filterLocalPayments(fallback, filters)
-  const params = new URLSearchParams()
-  const range = filters.period && filters.period !== 'CUSTOM' ? periodRange(filters.period) : { from: filters.from, to: filters.to }
-  if (range.from) params.set('from', range.from)
-  if (range.to) params.set('to', range.to)
-  if (filters.status) params.set('status', filters.status)
-  if (filters.method) params.set('method', filters.method)
-  if (filters.createdBy) params.set('createdBy', filters.createdBy)
-  if (filters.minAmountCents !== undefined) params.set('minAmountCents', String(filters.minAmountCents))
-  if (filters.maxAmountCents !== undefined) params.set('maxAmountCents', String(filters.maxAmountCents))
-  params.set('limit', String(filters.limit ?? 200))
-  const response = await apiFetch(`/api/payments?${params.toString()}`)
-  const body = await response.json().catch(() => ({})) as { payments?: unknown; error?: unknown }
-  if (!response.ok) throw new Error(typeof body.error === 'string' ? body.error : `No se pudieron cargar las operaciones (${response.status}).`)
-  if (!Array.isArray(body.payments)) throw new Error('El servidor devolvió un listado inválido.')
-  return body.payments.map(normalizePublicPayment)
+  const pageSize = Math.min(filters.limit ?? 200, 200)
+  const all: Payment[] = []
+  const maxPages = 25
+  for (let page = 0; page < maxPages; page += 1) {
+    const params = new URLSearchParams()
+    const range = filters.period && filters.period !== 'CUSTOM' ? periodRange(filters.period) : { from: filters.from, to: filters.to }
+    if (range.from) params.set('from', range.from)
+    if (range.to) params.set('to', range.to)
+    if (filters.status) params.set('status', filters.status)
+    if (filters.method) params.set('method', filters.method)
+    if (filters.createdBy) params.set('createdBy', filters.createdBy)
+    if (filters.minAmountCents !== undefined) params.set('minAmountCents', String(filters.minAmountCents))
+    if (filters.maxAmountCents !== undefined) params.set('maxAmountCents', String(filters.maxAmountCents))
+    params.set('limit', String(pageSize))
+    params.set('offset', String(page * pageSize))
+    const response = await apiFetch(`/api/payments?${params.toString()}`)
+    const body = await response.json().catch(() => ({})) as { payments?: unknown; hasMore?: unknown; error?: unknown }
+    if (!response.ok) throw new Error(typeof body.error === 'string' ? body.error : `No se pudieron cargar las operaciones (${response.status}).`)
+    if (!Array.isArray(body.payments)) throw new Error('El servidor devolvió un listado inválido.')
+    const next = body.payments.map(normalizePublicPayment)
+    all.push(...next)
+    if (body.hasMore !== true || next.length === 0) break
+    if (page === maxPages - 1) throw new Error('El reporte supera el límite operativo de 5,000 operaciones. Ajusta el periodo o los filtros.')
+  }
+  return all
 }
 
 function filterLocalPayments(payments: Payment[], filters: PaymentReportFilters): Payment[] {

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { assertCronSecret } from '../api/cron/reconcile-payments';
-import { createPaymentProvider, InMemoryPaymentRepository, MockPaymentProvider, PaymentService } from '../src/server';
+import { createPaymentProvider, InMemoryPaymentRepository, MockPaymentProvider, PaymentService, type Payment, type PaymentProvider } from '../src/server';
 
 function setup() {
   const repository = new InMemoryPaymentRepository();
@@ -79,6 +79,109 @@ describe('payment reconciliation', () => {
     expect(result.changed).toBe(false);
     expect(result.payment.status).toBe('PAID');
     expect(repository.events.size).toBe(1);
+  });
+
+  it('bounds expired-payment scans and provider concurrency', async () => {
+    const repository = new InMemoryPaymentRepository();
+    let active = 0;
+    let maxActive = 0;
+    let calls = 0;
+    const provider: PaymentProvider = {
+      name: 'fixture',
+      async createPayment() { throw new Error('not used'); },
+      async getPayment(providerPaymentId) {
+        calls += 1;
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        active -= 1;
+        const payment = await repository.findByProviderPaymentId(providerPaymentId);
+        if (!payment) throw new Error('missing fixture payment');
+        return {
+          providerPaymentId,
+          reference: payment.reference,
+          amountCents: payment.amountCents,
+          currency: payment.currency,
+          status: 'PENDING' as const,
+        };
+      },
+      async verifyWebhook() { throw new Error('not used'); },
+      async cancelPayment() { throw new Error('not used'); },
+    };
+    for (let index = 0; index < 5; index += 1) {
+      const payment: Payment = {
+        id: `expired-${index}`,
+        reference: `CAT-20260902-AAAAA${index + 2}`,
+        amountCents: 1000,
+        currency: 'PEN',
+        provider: provider.name,
+        providerPaymentId: `provider-${index}`,
+        status: 'PENDING',
+        createdBy: null,
+        createdAt: '2026-09-02T11:00:00.000Z',
+        expiresAt: `2026-09-02T11:0${index}:00.000Z`,
+        paidAt: null,
+        cancelledAt: null,
+        providerData: {},
+        idempotencyKey: null,
+      };
+      await repository.insert(payment);
+    }
+    const service = new PaymentService({
+      repository,
+      provider,
+      expireLimit: 3,
+      expireConcurrency: 2,
+    });
+
+    const expired = await service.expirePayments(new Date('2026-09-02T12:00:00.000Z'));
+
+    expect(calls).toBe(3);
+    expect(maxActive).toBe(2);
+    expect(expired.map((payment) => payment.id)).toEqual(['expired-0', 'expired-1', 'expired-2']);
+    expect((await repository.list({ status: 'EXPIRED', limit: 10 })).length).toBe(3);
+    expect((await repository.list({ status: 'PENDING', limit: 10 })).length).toBe(2);
+  });
+
+  it('retries an expired provisional intent before closing it', async () => {
+    const repository = new InMemoryPaymentRepository();
+    const intent: Payment = {
+      id: 'intent-expired-recovery', reference: 'CAT-20260902-ABCD23', amountCents: 3000, currency: 'PEN',
+      provider: 'fixture', providerPaymentId: null, status: 'PENDING', createdBy: 'cashier-1',
+      createdAt: '2026-09-02T12:00:00.000Z', expiresAt: '2026-09-02T12:01:00.000Z',
+      paidAt: null, cancelledAt: null, providerData: {}, idempotencyKey: 'expired-recovery-20260902',
+    };
+    await repository.insert(intent);
+    let createCalls = 0;
+    const provider: PaymentProvider = {
+      name: 'fixture',
+      async createPayment(input) {
+        createCalls += 1;
+        return {
+          providerPaymentId: 'fixture-late-1', status: 'PENDING', amountCents: input.amountCents,
+          currency: input.currency ?? 'PEN', reference: input.reference,
+        };
+      },
+      async getPayment(providerPaymentId) {
+        return {
+          providerPaymentId, status: 'PAID', amountCents: intent.amountCents, currency: intent.currency,
+          reference: intent.reference, eventId: 'fixture-late-event-1',
+        };
+      },
+      async verifyWebhook() { throw new Error('not used'); },
+      async cancelPayment() { throw new Error('not used'); },
+    };
+    const service = new PaymentService({
+      repository,
+      provider,
+      now: () => new Date('2026-09-02T12:05:00.000Z'),
+    });
+
+    const result = await service.reconcilePendingPayments();
+
+    expect(createCalls).toBe(1);
+    expect(result).toMatchObject({ inspected: 1, reconciled: 1, errors: 0 });
+    expect(await repository.findById(intent.id)).toMatchObject({ status: 'PAID', providerPaymentId: 'fixture-late-1' });
   });
 });
 

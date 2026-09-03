@@ -61,7 +61,7 @@ CASHIER selecciona monto
   -> UI recibe Realtime/polling y muestra éxito
 ```
 
-La creación de la operación y de la sesión externa debe tolerar fallos: si el proveedor o la escritura posterior fallan, la intención queda `PENDING` sin confirmar dinero y puede recuperarse mediante el mismo `Idempotency-Key` o la reconciliación server-side. Nunca se cancela una sesión externa ambigua. Un QR expirado nunca se reutiliza.
+La creación de la operación y de la sesión externa debe tolerar fallos: si el proveedor o la escritura posterior fallan, la intención queda `PENDING` sin confirmar dinero y puede recuperarse mediante el mismo `Idempotency-Key` o la reconciliación server-side. Incluso si ya pasó el vencimiento local, una intención sin `provider_payment_id` se reintenta de forma idempotente antes de cerrarse, porque la respuesta perdida podría ocultar un checkout ya creado. Nunca se cancela una sesión externa ambigua. Un QR expirado nunca se reutiliza.
 
 ## Flujo de efectivo
 
@@ -124,7 +124,7 @@ provider_data JSONB
 
 Supabase Auth identifica al usuario. El perfil/claim de rol permite `ADMIN` y `CASHIER`.
 
-- `CASHIER`: crear cobros digitales/efectivo, leer operaciones del día y pagos confirmados.
+- `CASHIER`: crear cobros digitales/efectivo y leer únicamente operaciones del día calendario de Lima (incluidos pagos confirmados).
 - `ADMIN`: alcance global, estadísticas, usuarios, montos rápidos, cancelación de pendientes y reportes.
 - Ningún cliente: escribir `PAID`, modificar `provider_payment_id`, editar auditoría o leer secretos.
 - Webhooks: rutas públicas limitadas a verificación criptográfica y servicio server-side; no se abre RLS al anónimo.

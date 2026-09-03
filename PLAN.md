@@ -44,15 +44,18 @@ Construir una caja web para Grupo La Católica que genere cobros digitales por o
 - [x] Hacer las creaciones retry-safe con `Idempotency-Key` y serializar la democión del último administrador.
 - [x] Rechazar reutilización conflictiva de `provider_event_id`, limitar campos de webhook y validar frescura HMAC de TAYPI.
 - [x] Persistir primero la intención digital y recuperar de forma idempotente un checkout cuyo ID no se alcanzó a adjuntar.
+- [x] Mantener recuperables las intenciones provisionales aun después del vencimiento local y acotar el escaneo de expirados.
 
 ### Fase 3 — Operación y reportes
 
 - [x] Reportes diario, semanal, mensual y rango personalizado.
 - [x] Filtros server-side, exportación CSV y permisos de administrador.
+- [x] Paginar reportes hasta 5,000 filas por consulta y limitar el ledger de cajeros al día de Lima.
 - [x] Cancelación de pendientes con validación del proveedor y auditoría atómica.
 - [x] PWA instalable con manifest, icono institucional y service worker limitado al shell estático.
 - [x] Gestión de usuarios y montos rápidos configurables desde administración.
 - [ ] Mejoras UX y accesibilidad adicionales.
+- [ ] Configurar rate limiting distribuido en Vercel WAF o gateway de producción.
 
 ### Fase 4 — Proveedores adicionales
 
