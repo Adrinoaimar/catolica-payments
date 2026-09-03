@@ -42,6 +42,8 @@ Construir una caja web para Grupo La Católica que genere cobros digitales por o
 - [x] Añadir reconciliación server-side por polling como respaldo del webhook.
 - [x] Registrar recibos de entrega sin payload duplicado y bloquear cron solapado con lease de Postgres.
 - [x] Hacer las creaciones retry-safe con `Idempotency-Key` y serializar la democión del último administrador.
+- [x] Rechazar reutilización conflictiva de `provider_event_id`, limitar campos de webhook y validar frescura HMAC de TAYPI.
+- [x] Persistir primero la intención digital y recuperar de forma idempotente un checkout cuyo ID no se alcanzó a adjuntar.
 
 ### Fase 3 — Operación y reportes
 

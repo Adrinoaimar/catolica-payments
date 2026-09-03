@@ -38,20 +38,15 @@ begin
      or nullif(trim(p_reference), '') is null
      or nullif(trim(p_provider_event_id), '') is null
      or nullif(trim(p_event_type), '') is null
+     or length(trim(p_provider_payment_id)) > 200
+     or length(trim(p_reference)) > 200
+     or length(trim(p_provider_event_id)) > 200
+     or length(trim(p_event_type)) > 200
      or p_amount_cents is null or p_amount_cents <= 0 or p_currency is distinct from 'PEN' then
     raise exception 'invalid payment webhook' using errcode = '22023';
   end if;
   if p_new_status is null or p_new_status not in ('PAID', 'FAILED', 'EXPIRED', 'CANCELLED') then
     raise exception 'invalid payment webhook status' using errcode = '22023';
-  end if;
-
-  -- Existing provider event is a successful no-op. The unique constraint also
-  -- protects concurrent deliveries of the same event.
-  select * into event_row from public.payment_events
-    where provider = p_provider and provider_event_id = p_provider_event_id;
-  if found then
-    select * into payment_row from public.payments where id = event_row.payment_id;
-    return jsonb_build_object('changed', false, 'duplicate', true, 'payment', to_jsonb(payment_row), 'event', to_jsonb(event_row));
   end if;
 
   select * into payment_row from public.payments
@@ -60,6 +55,17 @@ begin
   if not found then raise exception 'payment not found' using errcode = 'P0002'; end if;
   if payment_row.amount_cents <> p_amount_cents or payment_row.currency <> p_currency then
     raise exception 'payment amount mismatch' using errcode = '22023';
+  end if;
+
+  -- Existing provider event is a successful no-op only when it belongs to
+  -- this exact payment. A reused event ID must never return another payment.
+  select * into event_row from public.payment_events
+    where provider = p_provider and provider_event_id = p_provider_event_id;
+  if found then
+    if event_row.payment_id <> payment_row.id then
+      raise exception 'provider event ID belongs to another payment' using errcode = '22023';
+    end if;
+    return jsonb_build_object('changed', false, 'duplicate', true, 'payment', to_jsonb(payment_row), 'event', to_jsonb(event_row));
   end if;
   if payment_row.status <> 'PENDING' then
     return jsonb_build_object('changed', false, 'duplicate', false, 'payment', to_jsonb(payment_row));
@@ -85,7 +91,9 @@ exception when unique_violation then
   select * into event_row from public.payment_events
     where provider = p_provider and provider_event_id = p_provider_event_id;
   if found then
-    select * into payment_row from public.payments where id = event_row.payment_id;
+    if event_row.payment_id <> payment_row.id then
+      raise exception 'provider event ID belongs to another payment' using errcode = '22023';
+    end if;
     return jsonb_build_object('changed', false, 'duplicate', true, 'payment', to_jsonb(payment_row), 'event', to_jsonb(event_row));
   end if;
   raise;

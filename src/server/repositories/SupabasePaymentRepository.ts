@@ -36,10 +36,32 @@ export class SupabasePaymentRepository implements PaymentRepository {
     return (data ?? []).map((row: Row) => this.fromRow(row));
   }
 
-  async findEventByProviderEventId(providerEventId: string): Promise<PaymentEvent | null> {
-    const { data, error } = await this.client.from('payment_events').select('*').eq('provider_event_id', providerEventId).maybeSingle();
+  async findEventByProviderEventId(providerEventId: string, provider?: string): Promise<PaymentEvent | null> {
+    let query = this.client.from('payment_events').select('*').eq('provider_event_id', providerEventId);
+    if (provider) query = query.eq('provider', provider);
+    const { data, error } = await query.maybeSingle();
     if (error) throw error;
     return data ? this.eventFromRow(data) : null;
+  }
+
+  async attachProviderPayment(input: {
+    paymentId: string;
+    provider: string;
+    providerPaymentId: string;
+    providerData: Record<string, unknown>;
+    expiresAt: string | null;
+  }): Promise<Payment> {
+    const { data, error } = await this.client.rpc('attach_payment_provider', {
+      p_payment_id: input.paymentId,
+      p_provider: input.provider,
+      p_provider_payment_id: input.providerPaymentId,
+      p_provider_data: input.providerData,
+      p_expires_at: input.expiresAt,
+    });
+    if (error) throw error;
+    const result = data as { payment?: Row } | null;
+    if (!result?.payment) throw new Error('Supabase RPC returned no attached payment');
+    return this.fromRow(result.payment);
   }
 
   async listPendingExpired(now: string): Promise<Payment[]> {

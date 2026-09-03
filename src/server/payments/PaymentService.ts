@@ -46,7 +46,10 @@ export class PaymentService {
     this.maxAmountCents = options.maxAmountCents ?? 1_000_000;
     // Keep one scheduled pass bounded. A later pass continues with the
     // remaining rows, while idempotent RPCs make overlapping passes safe.
-    this.reconcileLimit = options.reconcileLimit ?? 25;
+    // Keep the scheduled pass below the serverless execution budget even when
+    // every provider request needs its bounded retry sequence. A later pass
+    // continues with the remaining rows.
+    this.reconcileLimit = options.reconcileLimit ?? 12;
     this.reconcileConcurrency = Math.min(8, Math.max(1, options.reconcileConcurrency ?? 4));
   }
 
@@ -59,60 +62,33 @@ export class PaymentService {
     const existing = idempotencyKey ? await this.options.repository.findByIdempotencyKey(idempotencyKey) : null;
     if (existing) {
       assertRetryCompatible(existing, { amountCents: input.amountCents, createdBy: input.createdBy ?? null, provider: provider.name });
-      return { payment: existing, providerPayment: this.providerPaymentFromPayment(existing) };
+      if (existing.providerPaymentId) return { payment: existing, providerPayment: this.providerPaymentFromPayment(existing) };
+      return this.recoverProviderPayment(existing, provider);
     }
     const reference = idempotencyKey ? generateIdempotentReference(createdAt, idempotencyKey) : this.makeReference();
-    const providerPayment = await provider.createPayment({
-      amountCents: input.amountCents, currency: 'PEN', reference,
-      createdBy: input.createdBy ?? null, expiresAt: expiresAt.toISOString(),
-    });
-    let payment: Payment;
-    let cancelOrphan = true;
+    const payment: Payment = {
+      id: randomUUID(), reference, amountCents: input.amountCents, currency: 'PEN',
+      provider: provider.name, providerPaymentId: null, status: 'PENDING',
+      createdBy: input.createdBy ?? null, createdAt: createdAt.toISOString(),
+      expiresAt: expiresAt.toISOString(), paidAt: null, cancelledAt: null,
+      providerData: {}, idempotencyKey,
+    };
     try {
-      validateCreatedProviderPayment(providerPayment, {
-        provider: provider.name,
-        reference,
-        amountCents: input.amountCents,
-        currency: 'PEN',
-      });
-      payment = {
-        id: randomUUID(), reference, amountCents: input.amountCents, currency: 'PEN',
-        provider: provider.name, providerPaymentId: providerPayment.providerPaymentId,
-        status: 'PENDING', createdBy: input.createdBy ?? null, createdAt: createdAt.toISOString(),
-        expiresAt: providerPayment.expiresAt ?? expiresAt.toISOString(), paidAt: null, cancelledAt: null,
-        providerData: providerPayment.providerData ?? {}, idempotencyKey,
-      };
-      try {
-        await this.options.repository.insert(payment);
-      } catch (insertError) {
-        // Two retries can reach the provider concurrently. If the first one
-        // won the ledger insert, return its row rather than cancelling the
-        // shared provider checkout.
-        if (idempotencyKey) {
-          const committed = await this.options.repository.findByIdempotencyKey(idempotencyKey);
-          if (committed) {
-            assertRetryCompatible(committed, { amountCents: input.amountCents, createdBy: input.createdBy ?? null, provider: provider.name });
-            return { payment: committed, providerPayment: this.providerPaymentFromPayment(committed) };
-          }
-          // The first concurrent request may still be committing. TAYPI's
-          // provider idempotency key makes the checkout recoverable on retry;
-          // cancelling here could cancel the sibling request's checkout.
-          cancelOrphan = false;
-        }
-        throw insertError;
-      }
-    } catch (error) {
-      // External checkout already exists. Best-effort cancellation prevents an
-      // orphaned QR when the ledger insert fails (for example, a duplicate
-      // reference or a transient database error).
-      if (cancelOrphan) {
-        try { await provider.cancelPayment(providerPayment.providerPaymentId); } catch (cancelError) {
-          console.error('Could not cancel orphaned provider payment', cancelError);
+      await this.options.repository.insert(payment);
+    } catch (insertError) {
+      // A concurrent retry may have won the idempotency race. Continue from
+      // its durable intent; never contact the provider before this lookup.
+      if (idempotencyKey) {
+        const committed = await this.options.repository.findByIdempotencyKey(idempotencyKey);
+        if (committed) {
+          assertRetryCompatible(committed, { amountCents: input.amountCents, createdBy: input.createdBy ?? null, provider: provider.name });
+          if (committed.providerPaymentId) return { payment: committed, providerPayment: this.providerPaymentFromPayment(committed) };
+          return this.recoverProviderPayment(committed, provider);
         }
       }
-      throw error;
+      throw insertError;
     }
-    return { payment, providerPayment };
+    return this.recoverProviderPayment(payment, provider);
   }
 
   async createCashPayment(input: { amountCents: number; createdBy?: string | null; idempotencyKey?: string | null }): Promise<Payment> {
@@ -163,9 +139,79 @@ export class PaymentService {
     };
   }
 
+  /**
+   * Complete a durable intent with an external checkout. The provider call is
+   * intentionally idempotent by reference; if it times out after creating a
+   * checkout, a later retry/reconciliation can obtain the same provider ID.
+   */
+  private async recoverProviderPayment(payment: Payment, provider: PaymentProvider): Promise<CreatedPayment> {
+    if (payment.provider !== provider.name) throw new PaymentOperationError(409, 'Payment provider mismatch');
+    if (payment.providerPaymentId) return { payment, providerPayment: this.providerPaymentFromPayment(payment) };
+    if (payment.status !== 'PENDING') throw new PaymentOperationError(409, 'Payment intent is not pending');
+
+    const now = this.now();
+    if (payment.expiresAt && new Date(payment.expiresAt).getTime() <= now.getTime()) {
+      const expired = (await this.options.repository.markExpired(payment.id, now.toISOString())).payment;
+      throw new PaymentOperationError(409, expired.providerPaymentId ? 'Payment intent is no longer pending' : 'Payment intent expired; create a new payment');
+    }
+
+    let providerPayment: ProviderPayment;
+    try {
+      providerPayment = await provider.createPayment({
+        amountCents: payment.amountCents,
+        currency: payment.currency,
+        reference: payment.reference,
+        createdBy: payment.createdBy,
+        expiresAt: payment.expiresAt,
+      });
+      validateCreatedProviderPayment(providerPayment, {
+        provider: provider.name,
+        reference: payment.reference,
+        amountCents: payment.amountCents,
+        currency: payment.currency,
+      });
+    } catch (error) {
+      // The provider may have created a checkout before the response failed.
+      // Keep the intent PENDING; cancelling or marking FAILED would make the
+      // external operation unrecoverable and can race a valid payment.
+      throw error;
+    }
+
+    try {
+      const attached = await this.options.repository.attachProviderPayment({
+        paymentId: payment.id,
+        provider: provider.name,
+        providerPaymentId: providerPayment.providerPaymentId,
+        providerData: {
+          ...(providerPayment.providerData ?? {}),
+          ...(providerPayment.qrCode ? { qrCode: providerPayment.qrCode } : {}),
+          ...(providerPayment.checkoutUrl ? { checkoutUrl: providerPayment.checkoutUrl } : {}),
+          ...(providerPayment.checkoutToken ? { checkoutToken: providerPayment.checkoutToken } : {}),
+        },
+        expiresAt: providerPayment.expiresAt ?? payment.expiresAt,
+      });
+      // Return the provider response for the first caller so QR/checkout
+      // fields that are not part of the public ledger projection are kept.
+      return { payment: attached, providerPayment };
+    } catch (error) {
+      // Another request may have attached the same id while this request was
+      // in flight. Reload before surfacing a transient DB/unique error.
+      const latest = await this.options.repository.findById(payment.id);
+      if (latest?.providerPaymentId === providerPayment.providerPaymentId) {
+        return { payment: latest, providerPayment: this.providerPaymentFromPayment(latest) };
+      }
+      // Never cancel an ambiguous external checkout. Its reference remains
+      // recoverable by the next retry/reconciliation pass.
+      throw error;
+    }
+  }
+
   async processWebhook(webhook: VerifiedWebhook): Promise<{ payment: Payment; changed: boolean }> {
     const provider = this.digitalProvider();
-    if (!webhook.eventId || !webhook.providerPaymentId || !webhook.reference || !webhook.eventType) throw new Error('Invalid webhook');
+    assertWebhookField(webhook.eventId, 'event ID');
+    assertWebhookField(webhook.providerPaymentId, 'provider payment ID');
+    assertWebhookField(webhook.reference, 'reference');
+    assertWebhookField(webhook.eventType, 'event type');
     if (!isTerminalStatus(webhook.status)) throw new Error('Invalid webhook status');
     if (webhook.currency !== 'PEN') throw new Error('Unsupported webhook currency');
     this.validateAmount(webhook.amountCents);
@@ -173,11 +219,31 @@ export class PaymentService {
     if (!payment) throw new Error('Payment not found for provider payment ID');
     if (payment.reference !== webhook.reference) throw new Error('Webhook reference mismatch');
     if (payment.amountCents !== webhook.amountCents || payment.currency !== webhook.currency) throw new Error('Webhook amount mismatch');
+    const previousEvent = await this.options.repository.findEventByProviderEventId(webhook.eventId, provider.name);
+    if (previousEvent && (previousEvent.paymentId !== payment.id
+      || previousEvent.provider !== provider.name
+      || previousEvent.newStatus !== webhook.status)) {
+      throw new ProviderError('Webhook event ID was already used for different payment data', 400, 'INVALID_WEBHOOK');
+    }
     const result = await this.options.repository.markPaidFromWebhook({
       paymentId: payment.id, provider: provider.name, amountCents: webhook.amountCents, currency: webhook.currency,
       providerEventId: webhook.eventId, newStatus: webhook.status,
       payload: webhook.payload, eventType: webhook.eventType, paidAt: this.now().toISOString(),
     });
+    // A legacy/alternate repository may return an existing event from a
+    // conflicting payment when its DB unique constraint wins a race. Never
+    // expose that row as the result of this webhook.
+    if (result.payment.id !== payment.id
+      || result.payment.provider !== provider.name
+      || result.payment.providerPaymentId !== webhook.providerPaymentId
+      || result.payment.reference !== webhook.reference
+      || (result.event && (result.event.paymentId !== payment.id
+        || result.event.provider !== provider.name
+        || result.event.providerEventId !== webhook.eventId
+        || result.event.newStatus !== webhook.status
+        || result.event.eventType !== webhook.eventType))) {
+      throw new ProviderError('Webhook event ID was already used for different payment data', 400, 'INVALID_WEBHOOK');
+    }
     return { payment: result.payment, changed: result.changed };
   }
 
@@ -195,13 +261,17 @@ export class PaymentService {
     const pending = await this.options.repository.list({ status: 'PENDING', provider: provider.name, limit: this.reconcileLimit });
     const summary: ReconciliationSummary = { inspected: pending.length, reconciled: 0, skipped: 0, errors: 0, payments: [] };
     const reconcileOne = async (payment: Payment): Promise<{ kind: 'reconciled' | 'skipped' | 'error'; payment?: Payment }> => {
-      if (!payment.providerPaymentId) return { kind: 'skipped' };
       try {
-        const state = await provider.getPayment(payment.providerPaymentId);
-        if (state.providerPaymentId !== payment.providerPaymentId || !state.reference || state.reference !== payment.reference) {
+        let current = payment;
+        if (!current.providerPaymentId) {
+          current = (await this.recoverProviderPayment(current, provider)).payment;
+        }
+        if (!current.providerPaymentId) return { kind: 'skipped' };
+        const state = await provider.getPayment(current.providerPaymentId);
+        if (state.providerPaymentId !== current.providerPaymentId || !state.reference || state.reference !== current.reference) {
           return { kind: 'skipped' };
         }
-        if (!Number.isSafeInteger(state.amountCents) || state.amountCents !== payment.amountCents || state.currency !== payment.currency) {
+        if (!Number.isSafeInteger(state.amountCents) || state.amountCents !== current.amountCents || state.currency !== current.currency) {
           return { kind: 'skipped' };
         }
         if (!isTerminalStatus(state.status)) {
@@ -251,16 +321,18 @@ export class PaymentService {
     // provider. A late result must never reopen a ledger row already expired.
     const payment = await this.findPaymentByReference(reference);
     if (!payment) throw new Error('Payment not found');
-    if (payment.status !== 'PENDING' || payment.provider !== provider.name || !payment.providerPaymentId) {
+    if (payment.status !== 'PENDING' || payment.provider !== provider.name) {
       return { payment, changed: false };
     }
-    const state = await provider.getPayment(payment.providerPaymentId);
-    if (state.providerPaymentId !== payment.providerPaymentId
+    const current = payment.providerPaymentId ? payment : (await this.recoverProviderPayment(payment, provider)).payment;
+    if (!current.providerPaymentId) return { payment: current, changed: false };
+    const state = await provider.getPayment(current.providerPaymentId);
+    if (state.providerPaymentId !== current.providerPaymentId
       || state.reference !== payment.reference
-      || !Number.isSafeInteger(state.amountCents) || state.amountCents !== payment.amountCents
-      || state.currency !== payment.currency
+      || !Number.isSafeInteger(state.amountCents) || state.amountCents !== current.amountCents
+      || state.currency !== current.currency
       || !isTerminalStatus(state.status)) {
-      return { payment, changed: false };
+      return { payment: current, changed: false };
     }
     const eventId = normalizeReconciliationEventId(state.eventId, provider.name, state.providerPaymentId);
     return this.processWebhook({
@@ -374,7 +446,8 @@ function validateCreatedProviderPayment(
   providerPayment: Awaited<ReturnType<PaymentProvider['createPayment']>>,
   expected: { provider: string; reference: string; amountCents: number; currency: string },
 ): void {
-  if (!providerPayment || typeof providerPayment.providerPaymentId !== 'string' || !providerPayment.providerPaymentId.trim()) {
+  if (!providerPayment || typeof providerPayment.providerPaymentId !== 'string' || !providerPayment.providerPaymentId.trim()
+    || !isSafeWebhookField(providerPayment.providerPaymentId)) {
     throw new ProviderError(`${expected.provider} response missing payment ID`, 502, 'PROVIDER_INVALID_RESPONSE');
   }
   if (providerPayment.amountCents !== expected.amountCents) {
@@ -386,7 +459,10 @@ function validateCreatedProviderPayment(
   if (providerPayment.reference !== expected.reference) {
     throw new ProviderError(`${expected.provider} response reference mismatch`, 502, 'PROVIDER_INVALID_RESPONSE');
   }
-  if (providerPayment.status && providerPayment.status !== 'PENDING') {
+  // An idempotent retry can return a checkout that completed while the
+  // original response was lost. Attach the known terminal provider state and
+  // let webhook/reconciliation perform the authoritative ledger transition.
+  if (providerPayment.status && providerPayment.status !== 'PENDING' && !isTerminalStatus(providerPayment.status)) {
     throw new ProviderError(`${expected.provider} returned an unexpected creation status`, 502, 'PROVIDER_INVALID_RESPONSE');
   }
 }
@@ -403,6 +479,14 @@ function normalizeReconciliationEventId(eventId: string | undefined, provider: s
   const value = typeof eventId === 'string' ? eventId.trim() : '';
   if (value && value.length <= 200) return value;
   return `reconcile:${provider}:${providerPaymentId}:terminal`;
+}
+
+function assertWebhookField(value: string, label: string): void {
+  if (!isSafeWebhookField(value)) throw new ProviderError(`Invalid webhook ${label}`, 400, 'INVALID_WEBHOOK');
+}
+
+function isSafeWebhookField(value: string, maxLength = 200): boolean {
+  return value.trim().length > 0 && value.length <= maxLength && !/[\u0000-\u001f\u007f]/.test(value);
 }
 
 function isTerminalStatus(status: Payment['status'] | undefined): status is Exclude<Payment['status'], 'PENDING'> {

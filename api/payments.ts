@@ -39,6 +39,9 @@ export default async function handler(request: ApiRequest, response: ApiResponse
     const idempotencyKey = parseIdempotencyKey(request);
     const method = body.method === undefined ? 'DIGITAL' : String(body.method).toUpperCase();
     if (method !== 'DIGITAL' && method !== 'CASH') throw new HttpError(400, 'method must be DIGITAL or CASH');
+    if (method === 'DIGITAL' && !idempotencyKey) {
+      throw new HttpError(400, 'Idempotency-Key is required for digital payments');
+    }
     if (method === 'CASH') {
       const payment = await cashPaymentContext(client).createCashPayment({ amountCents, createdBy: user.id, idempotencyKey });
       response.status(201).json({ payment: publicPayment(payment) });

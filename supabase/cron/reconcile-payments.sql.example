@@ -44,7 +44,9 @@ select cron.schedule(
           where name = 'catolica_reconcile_secret'
         )
       ),
-      timeout_milliseconds := 10000
+      -- The route itself bounds each provider request and may need several
+      -- retries. Keep the HTTP timeout below the five-minute function budget.
+      timeout_milliseconds := 240000
     ) as request_id;
   $$
 );

@@ -57,7 +57,7 @@ No confiar en un campo de éxito sin verificarlo contra el proveedor cuando el c
 
 ## Mock y desarrollo
 
-`/dev/mock-payment/:reference` y `POST /api/webhooks/mock` solo se habilitan fuera de producción y requieren el proveedor mock. El servidor debe rechazar explícitamente la ruta cuando `NODE_ENV=production`, aunque alguien conozca la URL. El mock no debe aceptar llamadas desde una aplicación desplegada con proveedor real.
+`/dev/mock-payment/:reference` y `POST /api/webhooks/mock` solo se habilitan en desarrollo local explícito y requieren el proveedor mock. El servidor debe rechazar explícitamente las rutas cuando `NODE_ENV=production` o `VERCEL_ENV=preview`, aunque alguien conozca la URL. El mock no debe aceptar llamadas desde una aplicación desplegada con proveedor real.
 
 ## Validación y abuso
 

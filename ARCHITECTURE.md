@@ -48,9 +48,9 @@ CASHIER selecciona monto
   -> POST /api/payments
   -> validar sesión, rol, monto y límites
   -> generar referencia CAT-YYYYMMDD-XXXXXX
-  -> insertar payment PENDING
-  -> crear checkout mediante proveedor
-  -> guardar datos no sensibles del proveedor
+  -> insertar intent payment PENDING (provider_payment_id NULL)
+  -> crear/reusar checkout mediante proveedor con la misma referencia
+  -> adjuntar provider_payment_id y datos no sensibles en RPC con bloqueo
   -> mostrar QR y referencia
   -> proveedor envía webhook
   -> verificar firma y normalizar evento
@@ -61,7 +61,7 @@ CASHIER selecciona monto
   -> UI recibe Realtime/polling y muestra éxito
 ```
 
-La creación de la operación y de la sesión externa debe tolerar fallos: si el proveedor no crea checkout, se cancela o marca la operación según la política del servicio, sin mostrar un QR reutilizable. Un QR expirado nunca se reutiliza.
+La creación de la operación y de la sesión externa debe tolerar fallos: si el proveedor o la escritura posterior fallan, la intención queda `PENDING` sin confirmar dinero y puede recuperarse mediante el mismo `Idempotency-Key` o la reconciliación server-side. Nunca se cancela una sesión externa ambigua. Un QR expirado nunca se reutiliza.
 
 ## Flujo de efectivo
 
@@ -94,7 +94,7 @@ PENDING -> CANCELLED  cancelación autorizada
 6. Inserta `payment_events` con `provider_event_id` único.
 7. Cambia estado y `paid_at` en la misma transacción.
 
-Reintentos concurrentes reciben resultado idempotente; una misma confirmación no suma dos veces ni crea dos eventos financieros.
+Reintentos concurrentes reciben resultado idempotente; una misma confirmación no suma dos veces ni crea dos eventos financieros. La intención digital se persiste antes de contactar al proveedor y `attach_payment_provider` bloquea la fila, rechaza sustituir un ID externo y permite que el cron recupere un ID perdido.
 
 ## Modelo de datos
 
@@ -157,4 +157,4 @@ Dashboard agrega por `amount_cents` y separa `provider=CASH` de pagos digitales.
 
 ## Despliegue
 
-Vercel sirve el frontend y funciones serverless desde el mismo repositorio GitHub. Variables públicas y secretas se separan por ambiente. Preview usa el mock; Production usa proveedor real solo con firma/webhook probados. Webhooks deben apuntar a HTTPS. GitHub Pages no ejecuta backend ni debe contener variables secretas.
+Vercel sirve el frontend y funciones serverless desde el mismo repositorio GitHub. Variables públicas y secretas se separan por ambiente. El mock solo se permite en desarrollo local explícito; Preview y Production bloquean rutas mock y usan proveedor real únicamente con firma/webhook probados. Webhooks deben apuntar a HTTPS. GitHub Pages no ejecuta backend ni debe contener variables secretas.

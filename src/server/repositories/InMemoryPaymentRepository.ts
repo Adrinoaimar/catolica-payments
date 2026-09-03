@@ -58,9 +58,40 @@ export class InMemoryPaymentRepository implements PaymentRepository {
     return values.slice(0, filters.limit ?? 100).map((payment) => structuredClone(payment));
   }
 
-  async findEventByProviderEventId(providerEventId: string): Promise<PaymentEvent | null> {
-    const event = this.eventIds.get(providerEventId);
+  async findEventByProviderEventId(providerEventId: string, provider?: string): Promise<PaymentEvent | null> {
+    const event = provider
+      ? this.eventIds.get(eventKey(provider, providerEventId))
+      : [...this.eventIds.values()].find((item) => item.providerEventId === providerEventId);
     return event ? structuredClone(event) : null;
+  }
+
+  async attachProviderPayment(input: {
+    paymentId: string;
+    provider: string;
+    providerPaymentId: string;
+    providerData: Record<string, unknown>;
+    expiresAt: string | null;
+  }): Promise<Payment> {
+    return this.withLock(input.paymentId, async () => {
+      const payment = this.payments.get(input.paymentId);
+      if (!payment) throw new Error('Payment not found');
+      if (payment.provider !== input.provider) throw new Error('Payment provider mismatch');
+      if (payment.providerPaymentId) {
+        if (payment.providerPaymentId !== input.providerPaymentId) throw new Error('Provider payment ID mismatch');
+        return structuredClone(payment);
+      }
+      if (payment.status !== 'PENDING') throw new Error('Payment intent is not pending');
+      const owner = [...this.payments.values()].find((item) => item.providerPaymentId === input.providerPaymentId);
+      if (owner && owner.id !== payment.id) throw new Error('Provider payment ID already exists');
+      const next: Payment = {
+        ...payment,
+        providerPaymentId: input.providerPaymentId,
+        providerData: structuredClone(input.providerData),
+        expiresAt: input.expiresAt ?? payment.expiresAt,
+      };
+      this.payments.set(payment.id, next);
+      return structuredClone(next);
+    });
   }
 
   async listPendingExpired(now: string): Promise<Payment[]> {
@@ -96,7 +127,7 @@ export class InMemoryPaymentRepository implements PaymentRepository {
     return this.withLock(input.paymentId, async () => {
       const payment = this.payments.get(input.paymentId);
       if (!payment) throw new Error('Payment not found');
-      const duplicate = this.eventIds.get(input.providerEventId);
+      const duplicate = this.eventIds.get(eventKey(input.provider, input.providerEventId));
       if (duplicate) return { payment: structuredClone(payment), event: structuredClone(duplicate), changed: false };
       if (payment.status !== 'PENDING') return { payment: structuredClone(payment), event: null, changed: false };
       const event: PaymentEvent = {
@@ -113,7 +144,7 @@ export class InMemoryPaymentRepository implements PaymentRepository {
       };
       this.payments.set(payment.id, next);
       this.events.set(event.id, event);
-      this.eventIds.set(event.providerEventId, event);
+      this.eventIds.set(eventKey(event.provider, event.providerEventId), event);
       return { payment: structuredClone(next), event: structuredClone(event), changed: true };
     });
   }
@@ -129,7 +160,7 @@ export class InMemoryPaymentRepository implements PaymentRepository {
         rawPayload: { reason: 'expires_at reached' }, createdAt: at,
       };
       const next = { ...payment, status: 'EXPIRED' as const };
-      this.payments.set(paymentId, next); this.events.set(event.id, event); this.eventIds.set(event.providerEventId, event);
+      this.payments.set(paymentId, next); this.events.set(event.id, event); this.eventIds.set(eventKey(event.provider, event.providerEventId), event);
       return { payment: structuredClone(next), event: structuredClone(event), changed: true };
     });
   }
@@ -148,7 +179,7 @@ export class InMemoryPaymentRepository implements PaymentRepository {
     return this.withLock(input.paymentId, async () => {
       const payment = this.payments.get(input.paymentId);
       if (!payment) throw new Error('Payment not found');
-      const duplicate = this.eventIds.get(input.providerEventId);
+      const duplicate = this.eventIds.get(eventKey(input.provider, input.providerEventId));
       if (duplicate) return { payment: structuredClone(payment), event: structuredClone(duplicate), changed: false };
       if (payment.provider !== input.provider || payment.providerPaymentId !== input.providerPaymentId || payment.reference !== input.reference) {
         throw new Error('Payment identity mismatch');
@@ -172,7 +203,7 @@ export class InMemoryPaymentRepository implements PaymentRepository {
       const next: Payment = { ...payment, status: 'CANCELLED', cancelledAt: input.cancelledAt };
       this.payments.set(payment.id, next);
       this.events.set(event.id, event);
-      this.eventIds.set(event.providerEventId, event);
+      this.eventIds.set(eventKey(event.provider, event.providerEventId), event);
       return { payment: structuredClone(next), event: structuredClone(event), changed: true };
     });
   }
@@ -180,7 +211,11 @@ export class InMemoryPaymentRepository implements PaymentRepository {
   async insertCashPayment(payment: Payment, event: PaymentEvent): Promise<Payment> {
     await this.insert(payment);
     this.events.set(event.id, structuredClone(event));
-    this.eventIds.set(event.providerEventId, structuredClone(event));
+    this.eventIds.set(eventKey(event.provider, event.providerEventId), structuredClone(event));
     return structuredClone(payment);
   }
+}
+
+function eventKey(provider: string, providerEventId: string): string {
+  return `${provider}:${providerEventId}`;
 }

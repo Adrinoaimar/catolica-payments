@@ -87,7 +87,7 @@ Cada adaptador debe autenticar el evento, buscar la referencia, comparar monto y
 
 Un administrador puede cancelar una operación digital `PENDING` desde la pantalla de cobro. La API `POST /api/payments/:reference/cancel` exige sesión Bearer con rol `ADMIN`, consulta el estado del proveedor antes de cancelar y registra la transición y su motivo en `payment_events` dentro de una operación atómica. Nunca puede convertir una operación terminal en `CANCELLED`.
 
-Las creaciones aceptan `Idempotency-Key` (16–200 caracteres imprimibles). La clave queda registrada con el pago y una repetición compatible devuelve el mismo checkout o recibo de efectivo; reutilizarla con otro monto, usuario o método devuelve `409`.
+Las creaciones aceptan `Idempotency-Key` (16–200 caracteres imprimibles); la API la exige para cobros digitales. La clave queda registrada con el pago y una repetición compatible devuelve el mismo checkout o recibo de efectivo; reutilizarla con otro monto, usuario o método devuelve `409`. La intención `PENDING` se guarda antes de llamar al proveedor y un reconciliador puede completar un checkout cuyo ID no alcanzó a persistirse.
 
 ### Alternativa cuando el webhook se retrasa
 
@@ -95,7 +95,7 @@ El webhook del proveedor es el camino principal. Como respaldo, `GET /api/cron/r
 
 TAYPI también reintenta webhooks y permite reenvío manual desde su panel. La reconciliación por `GET /api/v1/payments/:payment_id` es una red de seguridad, no reemplaza la firma HMAC ni la auditoría. [SDK JavaScript de TAYPI](https://docs.taypi.pe/sdks/javascript), [Webhooks de TAYPI](https://docs.taypi.pe/webhooks)
 
-Alternativas evaluadas: reenvío/reintentos nativos de TAYPI, polling server-side centralizado (implementado mediante cron y acción excepcional), Supabase Cron/`pg_cron` llamando esta ruta, y Supabase Queues para una futura cola durable. El cliente TAYPI reintenta solo fallos transitorios HTTP (429/5xx/timeouts), con backoff acotado e idempotency keys. Cada pasada del reconciliador inspecciona como máximo 25 pendientes y consulta hasta cuatro en paralelo; un lease en Postgres evita ejecuciones solapadas. Supabase Realtime es el canal principal para refrescar la interfaz; la app solo usa lectura del ledger como respaldo cuando el canal no está saludable. `onSuccess` de un checkout o cualquier señal del navegador no confirma dinero. Referencias: [Supabase Cron](https://supabase.com/docs/guides/cron), [Supabase Queues](https://supabase.com/docs/guides/queues).
+Alternativas evaluadas: reenvío/reintentos nativos de TAYPI, polling server-side centralizado (implementado mediante cron y acción excepcional), Supabase Cron/`pg_cron` llamando esta ruta, y Supabase Queues para una futura cola durable. El cliente TAYPI reintenta solo fallos transitorios HTTP (429/5xx/timeouts), con backoff acotado e idempotency keys. Cada pasada del reconciliador inspecciona como máximo 12 pendientes y consulta hasta cuatro en paralelo; un lease en Postgres evita ejecuciones solapadas. La ruta declara un presupuesto de hasta cinco minutos para despliegues Vercel compatibles; la plantilla Supabase usa un timeout HTTP de cuatro minutos. Supabase Realtime es el canal principal para refrescar la interfaz; la app solo usa lectura del ledger como respaldo cuando el canal no está saludable. `onSuccess` de un checkout o cualquier señal del navegador no confirma dinero. Referencias: [Supabase Cron](https://supabase.com/docs/guides/cron), [Supabase Queues](https://supabase.com/docs/guides/queues).
 
 Para usar Supabase Cron como alternativa a Vercel Cron, habilite `pg_cron` y `pg_net`, guarde la URL HTTPS del endpoint y `CRON_SECRET` en Supabase Vault, y ejecute la plantilla [supabase/cron/reconcile-payments.sql.example](supabase/cron/reconcile-payments.sql.example) con el rol `postgres`. La plantilla no contiene secretos, usa `Authorization: Bearer` y permite revisar ejecuciones en `cron.job_run_details` y respuestas en `net._http_response`. Mantenga un solo job activo para evitar llamadas duplicadas; el lock transaccional del endpoint también protege contra solapamientos.
 
@@ -127,7 +127,7 @@ Antes de procesar dinero real, complete la verificación KYB de la cuenta de TAY
 ## Supabase
 
 1. Cree un proyecto y habilite Email/Password o el proveedor de Auth seleccionado.
-2. Ejecute las migraciones en `supabase/migrations/`.
+2. Ejecute en orden las migraciones en `supabase/migrations/`, incluidas `20260903000008_harden_webhook_identity.sql` para instalaciones que ya tenían la función RPC anterior y `20260903000009_recoverable_payment_intents.sql` para adjuntar de forma transaccional el checkout externo a una intención pendiente.
 3. Asigne roles mediante el mecanismo definido por las migraciones (`ADMIN` o `CASHIER`).
 4. Ejecute también `20260902000002_realtime_payment_updates.sql`; crea la proyección mínima `payment_updates`, su trigger y la publicación `supabase_realtime` sin transmitir `provider_data`.
 5. Verifique RLS con ambos roles antes de publicar.

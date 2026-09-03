@@ -75,6 +75,28 @@ describe('TaypiProvider', () => {
     expect(attempts).toBe(3);
   });
 
+  it('retries when a transient response body cannot be read', async () => {
+    let attempts = 0;
+    const provider = new TaypiProvider({
+      publicKey,
+      secretKey,
+      now: () => 1_710_504_600,
+      baseUrl: 'https://sandbox.taypi.pe',
+      fetchImpl: async () => {
+        attempts += 1;
+        const response = new Response(JSON.stringify({ data: {
+          payment_id: 'pay_fixture_body_retry', status: 'pending', amount: '10.00', currency: 'PEN', reference: 'CAT-TEST-003',
+        } }), { status: 201 });
+        if (attempts < 3) {
+          Object.defineProperty(response, 'text', { value: async () => { throw new Error('stream interrupted'); } });
+        }
+        return response;
+      },
+    });
+    await expect(provider.createPayment({ amountCents: 1_000, currency: 'PEN', reference: 'CAT-TEST-003' })).resolves.toMatchObject({ providerPaymentId: 'pay_fixture_body_retry' });
+    expect(attempts).toBe(3);
+  });
+
   it('verifies signed completed webhook and maps TAYPI fields', async () => {
     const rawBody = JSON.stringify({
       event: 'payment.completed',

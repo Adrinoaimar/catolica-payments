@@ -19,7 +19,15 @@ export interface PaymentRepository {
   findByProviderPaymentId(providerPaymentId: string): Promise<Payment | null>;
   findByIdempotencyKey(idempotencyKey: string): Promise<Payment | null>;
   list(filters?: PaymentListFilters): Promise<Payment[]>;
-  findEventByProviderEventId(providerEventId: string): Promise<PaymentEvent | null>;
+  findEventByProviderEventId(providerEventId: string, provider?: string): Promise<PaymentEvent | null>;
+  /** Attach an external checkout to a previously persisted PENDING intent. */
+  attachProviderPayment(input: {
+    paymentId: string;
+    provider: string;
+    providerPaymentId: string;
+    providerData: Record<string, unknown>;
+    expiresAt: string | null;
+  }): Promise<Payment>;
   listPendingExpired(now: string): Promise<Payment[]>;
   /** Must lock/check status and write the audit event in one transaction. */
   markPaidFromWebhook(input: {

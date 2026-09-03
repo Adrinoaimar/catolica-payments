@@ -10,6 +10,10 @@ import {
   type ApiResponse,
 } from '../_shared';
 
+// Vercel Pro/Enterprise can run this bounded reconciliation pass for up to
+// five minutes. Hobby deployments should use the Supabase Cron template.
+export const config = { maxDuration: 300 };
+
 /** Vercel invokes cron handlers with GET and Authorization: Bearer CRON_SECRET. */
 export default async function handler(request: ApiRequest, response: ApiResponse): Promise<void> {
   if (request.method !== 'GET' && request.method !== 'POST') {

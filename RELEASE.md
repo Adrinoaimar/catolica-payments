@@ -10,7 +10,7 @@ Antes de desplegar, ejecute `npm run verify:production` con las variables cargad
 
 ## Migraciones y Realtime
 
-Ejecute en orden todas las migraciones de `supabase/migrations/`, incluidas `20260902000002_realtime_payment_updates.sql`, `20260902000003_admin_cancellation.sql`, `20260902000004_admin_settings.sql`, `20260902000005_webhook_receipts_and_job_lock.sql`, `20260902000006_create_idempotency.sql` y `20260902000007_lock_admin_role_changes.sql`. Después cree al menos un usuario Auth y su fila `user_roles` con `ADMIN` o `CASHIER`. Verifique que el canal `payment_updates` se suscribe con sesión autenticada y que `provider_data` nunca aparece en el payload público.
+Ejecute en orden todas las migraciones de `supabase/migrations/`, incluidas `20260902000002_realtime_payment_updates.sql`, `20260902000003_admin_cancellation.sql`, `20260902000004_admin_settings.sql`, `20260902000005_webhook_receipts_and_job_lock.sql`, `20260902000006_create_idempotency.sql`, `20260902000007_lock_admin_role_changes.sql`, `20260903000008_harden_webhook_identity.sql` y `20260903000009_recoverable_payment_intents.sql`. Después cree al menos un usuario Auth y su fila `user_roles` con `ADMIN` o `CASHIER`. Verifique que el canal `payment_updates` se suscribe con sesión autenticada y que `provider_data` nunca aparece en el payload público.
 
 ## Smoke test antes de dinero real
 
@@ -28,7 +28,7 @@ Si el smoke test falla, desactive el despliegue o vuelva a un entorno local de d
 
 ## Scheduler
 
-El cron de `vercel.json` usa cada cinco minutos. Si el plan Vercel limita esa frecuencia, invoque `/api/cron/reconcile-payments` desde Supabase Cron/`pg_cron` o un scheduler externo con el mismo secreto. El endpoint devuelve `503` si alguna operación no pudo reconciliarse, para que el scheduler/monitorización lo detecte. El webhook firmado sigue siendo la autoridad y el cron solo reconcilia estados consultados server-side; cada pasada está limitada a 25 pendientes y cuatro solicitudes simultáneas.
+El cron de `vercel.json` usa cada cinco minutos. La ruta declara `maxDuration=300` y limita cada pasada a 12 pendientes con cuatro solicitudes simultáneas. Si el plan Vercel limita esa frecuencia o duración, invoque `/api/cron/reconcile-payments` desde Supabase Cron/`pg_cron` o un scheduler externo con el mismo secreto. El endpoint devuelve `503` si alguna operación no pudo reconciliarse, para que el scheduler/monitorización lo detecte. También recupera intenciones `PENDING` que aún no tienen `provider_payment_id`, usando la misma referencia/idempotencia del proveedor. El webhook firmado sigue siendo la autoridad y el cron solo reconcilia estados consultados server-side.
 
 La migración `20260902000005_webhook_receipts_and_job_lock.sql` registra únicamente proveedor, identificador de entrega, hash SHA-256, resultado y código de error; no duplica el payload crudo. También crea un lease de Postgres para evitar cron solapado. Si el lock no está aplicado, el endpoint devuelve `503` y no consulta al proveedor.
 

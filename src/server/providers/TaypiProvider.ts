@@ -121,13 +121,19 @@ export class TaypiProvider implements PaymentProvider {
 
     // TAYPI sends delivery ID in a header. Hash fallback preserves idempotency
     // for valid deliveries from older accounts that omit that header.
-    const eventId = header(request.headers, 'taypi-webhook-id')
+    const eventId = header(request.headers, 'taypi-webhook-id')?.trim()
       || stringValue(payload.event_id)
       || `taypi:${createHash('sha256').update(request.rawBody, 'utf8').digest('hex')}`;
 
+    const normalizedEventType = eventType || `payment.${rawStatus}`;
+    if (!isSafeWebhookField(paymentId) || !isSafeWebhookField(reference)
+      || !isSafeWebhookField(eventId) || !isSafeWebhookField(normalizedEventType)) {
+      throw new ProviderError('Invalid taypi webhook payload', 400, 'INVALID_WEBHOOK');
+    }
+
     return {
       eventId,
-      eventType: eventType || `payment.${rawStatus}`,
+      eventType: normalizedEventType,
       providerPaymentId: paymentId,
       reference,
       amountCents,
@@ -179,7 +185,20 @@ export class TaypiProvider implements PaymentProvider {
           throw new ProviderError(`Taypi request failed: ${message}`, 502, 'PROVIDER_UNAVAILABLE');
         }
 
-        const responseBody = await response.text();
+        let responseBody: string;
+        try {
+          responseBody = await response.text();
+        } catch (error) {
+          if (attempt < maxAttempts - 1) {
+            await waitBeforeRetry(undefined, attempt);
+            continue;
+          }
+          throw new ProviderError(
+            `Taypi response could not be read: ${error instanceof Error ? error.message : 'unknown error'}`,
+            502,
+            'PROVIDER_UNAVAILABLE',
+          );
+        }
         let parsed: unknown;
         try {
           parsed = responseBody ? JSON.parse(responseBody) : {};
@@ -332,6 +351,10 @@ function normalizeWebhookTolerance(value: number | undefined): number {
     throw new ProviderError('Invalid webhook tolerance', 500, 'PROVIDER_NOT_CONFIGURED');
   }
   return value;
+}
+
+function isSafeWebhookField(value: string, maxLength = 200): boolean {
+  return value.trim().length > 0 && value.length <= maxLength && !/[\u0000-\u001f\u007f]/.test(value);
 }
 
 function isRetryableStatus(status: number): boolean {

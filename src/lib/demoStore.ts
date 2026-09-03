@@ -75,7 +75,7 @@ export async function listPayments(): Promise<Payment[]> {
   return body.payments.map(normalizePayment)
 }
 
-export async function createPaymentRequest(amountCents: number, method: PaymentMethod, user: SessionUser): Promise<Payment> {
+export async function createPaymentRequest(amountCents: number, method: PaymentMethod, user: SessionUser, idempotencyKeyOverride?: string): Promise<Payment> {
   const now = new Date().toISOString()
   const payment: Payment = {
     id: crypto.randomUUID?.() ?? `local-${Date.now()}`,
@@ -91,7 +91,7 @@ export async function createPaymentRequest(amountCents: number, method: PaymentM
     expiresAt: method === 'DIGITAL' ? new Date(Date.now() + 15 * 60_000).toISOString() : undefined,
   }
   // Backend remains source of truth. Local fallback exists only in explicit demo mode.
-  const idempotencyKey = crypto.randomUUID?.() ?? `catolica-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  const idempotencyKey = idempotencyKeyOverride ?? crypto.randomUUID?.() ?? `catolica-${Date.now()}-${Math.random().toString(36).slice(2)}`
   try {
     const response = await apiFetch(method === 'CASH' ? '/api/payments/cash' : '/api/payments', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey }, body: JSON.stringify({ amountCents, method }) })
     if (response.ok) {

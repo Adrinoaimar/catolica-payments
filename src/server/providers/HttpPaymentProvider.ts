@@ -93,10 +93,13 @@ export abstract class HttpPaymentProvider implements PaymentProvider {
       : providerAmount(data.amount) ?? NaN;
     const currency = String(data.currency ?? 'PEN');
     const status = String(data.status ?? '').toUpperCase();
-    if (!providerPaymentId || !reference || !eventId || !Number.isSafeInteger(amountCents) || !['PAID', 'FAILED', 'EXPIRED', 'CANCELLED'].includes(status)) {
+    const eventType = String(data.event_type ?? `payment.${status.toLowerCase()}`);
+    if (!isSafeWebhookField(providerPaymentId) || !isSafeWebhookField(reference)
+      || !isSafeWebhookField(eventId) || !isSafeWebhookField(eventType)
+      || !Number.isSafeInteger(amountCents) || !['PAID', 'FAILED', 'EXPIRED', 'CANCELLED'].includes(status)) {
       throw new ProviderError('Invalid webhook payload', 400, 'INVALID_WEBHOOK');
     }
-    return { eventId, eventType: String(data.event_type ?? `payment.${status.toLowerCase()}`), providerPaymentId, reference, amountCents, currency, status: status as VerifiedWebhook['status'], payload: data };
+    return { eventId, eventType, providerPaymentId, reference, amountCents, currency, status: status as VerifiedWebhook['status'], payload: data };
   }
 
   protected abstract signatureHeader(request: WebhookRequest): string | undefined;
@@ -122,6 +125,10 @@ export abstract class HttpPaymentProvider implements PaymentProvider {
     if (!response.ok) throw new ProviderError(`${this.name} API error`, response.status, 'PROVIDER_HTTP_ERROR');
     return data;
   }
+}
+
+function isSafeWebhookField(value: string, maxLength = 200): boolean {
+  return value.trim().length > 0 && value.length <= maxLength && !/[\u0000-\u001f\u007f]/.test(value);
 }
 
 function providerString(value: unknown): string {
