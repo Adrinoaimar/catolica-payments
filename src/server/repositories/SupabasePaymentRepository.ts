@@ -27,6 +27,8 @@ export class SupabasePaymentRepository implements PaymentRepository {
     if (filters.createdBy) query = query.eq('created_by', filters.createdBy);
     if (filters.from) query = query.gte('created_at', filters.from);
     if (filters.to) query = query.lte('created_at', filters.to);
+    if (filters.minAmountCents !== undefined) query = query.gte('amount_cents', filters.minAmountCents);
+    if (filters.maxAmountCents !== undefined) query = query.lte('amount_cents', filters.maxAmountCents);
     query = query.limit(filters.limit ?? 100);
     const { data, error } = await query;
     if (error) throw error;
@@ -69,6 +71,27 @@ export class SupabasePaymentRepository implements PaymentRepository {
 
   async markExpired(paymentId: string, at: string): Promise<{ payment: Payment; event: PaymentEvent | null; changed: boolean }> {
     const { data, error } = await this.client.rpc('expire_payment', { p_payment_id: paymentId, p_at: at });
+    if (error) throw error;
+    const result = data as { changed: boolean; payment: Row; event?: Row } | null;
+    if (!result?.payment) throw new Error('Supabase RPC returned no payment');
+    return { payment: this.fromRow(result.payment), event: result.event ? this.eventFromRow(result.event) : null, changed: result.changed === true };
+  }
+
+  async markCancelledByAdmin(input: {
+    paymentId: string; provider: string; providerPaymentId: string; reference: string;
+    providerEventId: string; eventId: string; actorId: string; reason?: string; cancelledAt: string;
+  }): Promise<{ payment: Payment; event: PaymentEvent | null; changed: boolean }> {
+    const { data, error } = await this.client.rpc('cancel_payment', {
+      p_payment_id: input.paymentId,
+      p_provider: input.provider,
+      p_provider_payment_id: input.providerPaymentId,
+      p_reference: input.reference,
+      p_provider_event_id: input.providerEventId,
+      p_event_id: input.eventId,
+      p_actor_id: input.actorId,
+      p_reason: input.reason ?? null,
+      p_cancelled_at: input.cancelledAt,
+    });
     if (error) throw error;
     const result = data as { changed: boolean; payment: Row; event?: Row } | null;
     if (!result?.payment) throw new Error('Supabase RPC returned no payment');

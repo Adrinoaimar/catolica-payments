@@ -54,6 +54,12 @@ export async function requireUser(request: ApiRequest, client: SupabaseClient): 
   return { id: data.user.id, role: roleRow.role as 'ADMIN' | 'CASHIER' };
 }
 
+export async function requireAdmin(request: ApiRequest, client: SupabaseClient): Promise<{ id: string; role: 'ADMIN' }> {
+  const user = await requireUser(request, client);
+  if (user.role !== 'ADMIN') throw new HttpError(403, 'Only administrators can cancel payments');
+  return { id: user.id, role: 'ADMIN' };
+}
+
 export function paymentRepository(client = serverClient()): SupabasePaymentRepository {
   return new SupabasePaymentRepository(client);
 }

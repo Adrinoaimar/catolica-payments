@@ -57,6 +57,8 @@ export class MockPaymentProvider implements PaymentProvider {
   async cancelPayment(providerPaymentId: string): Promise<void> {
     const record = this.records.get(providerPaymentId);
     if (!record) throw new ProviderError('Mock payment not found', 404, 'NOT_FOUND');
+    if (record.status === 'PAID') throw new ProviderError('Mock payment is already paid', 409, 'ALREADY_PAID');
+    if (record.status === 'CANCELLED') return;
     record.status = 'CANCELLED';
   }
 
@@ -64,6 +66,7 @@ export class MockPaymentProvider implements PaymentProvider {
   simulateSuccessfulPayment(providerPaymentId: string): string {
     const record = this.records.get(providerPaymentId);
     if (!record) throw new ProviderError('Mock payment not found', 404, 'NOT_FOUND');
+    if (record.status === 'CANCELLED') throw new ProviderError('Mock payment is already cancelled', 409, 'ALREADY_CANCELLED');
     record.status = 'PAID';
     const eventId = `mock_evt_${randomUUID()}`;
     record.eventId = eventId;

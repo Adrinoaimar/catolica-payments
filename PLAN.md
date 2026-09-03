@@ -41,9 +41,10 @@ Construir una caja web para Grupo La Católica que genere cobros digitales por o
 
 ### Fase 3 — Operación y reportes
 
-- [ ] Reportes diario, semanal, mensual y rango personalizado.
-- [ ] Filtros, exportación CSV y permisos de administrador.
-- [ ] Gestión de usuarios, montos rápidos y cancelación de pendientes.
+- [x] Reportes diario, semanal, mensual y rango personalizado.
+- [x] Filtros server-side, exportación CSV y permisos de administrador.
+- [x] Cancelación de pendientes con validación del proveedor y auditoría atómica.
+- [ ] Gestión de usuarios y montos rápidos configurables desde administración.
 - [ ] Mejoras UX, accesibilidad y PWA.
 
 ### Fase 4 — Proveedores adicionales

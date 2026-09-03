@@ -7,6 +7,8 @@ export interface PaymentListFilters {
   createdBy?: string;
   from?: string;
   to?: string;
+  minAmountCents?: number;
+  maxAmountCents?: number;
   limit?: number;
 }
 
@@ -29,6 +31,18 @@ export interface PaymentRepository {
     payload: unknown;
     eventType: string;
     paidAt: string;
+  }): Promise<{ payment: Payment; event: PaymentEvent | null; changed: boolean }>;
+  /** Must lock/check status and write the administrative cancellation audit event in one transaction. */
+  markCancelledByAdmin(input: {
+    paymentId: string;
+    provider: string;
+    providerPaymentId: string;
+    reference: string;
+    providerEventId: string;
+    eventId: string;
+    actorId: string;
+    reason?: string;
+    cancelledAt: string;
   }): Promise<{ payment: Payment; event: PaymentEvent | null; changed: boolean }>;
   markExpired(paymentId: string, at: string): Promise<{ payment: Payment; event: PaymentEvent | null; changed: boolean }>;
   insertCashPayment(payment: Payment, event: PaymentEvent): Promise<Payment>;

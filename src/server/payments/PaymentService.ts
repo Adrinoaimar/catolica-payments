@@ -21,6 +21,13 @@ export interface CreatedPayment {
   providerPayment: Awaited<ReturnType<PaymentProvider['createPayment']>>;
 }
 
+export class PaymentOperationError extends Error {
+  constructor(readonly statusCode: 404 | 409, message: string) {
+    super(message);
+    this.name = 'PaymentOperationError';
+  }
+}
+
 export class PaymentService {
   private readonly now: () => Date;
   private readonly makeReference: () => string;
@@ -191,6 +198,66 @@ export class PaymentService {
         amount_cents: state.amountCents, currency: state.currency, status: state.status,
       },
     });
+  }
+
+  /**
+   * Cancel one pending digital payment from an authenticated administrative
+   * action. Provider state is checked before cancellation so a stale ledger
+   * cannot cancel an already paid provider operation. Ledger transition and
+   * audit event are atomic after provider cancellation succeeds.
+   */
+  async cancelPaymentByReference(input: {
+    reference: string;
+    actorId: string;
+    reason?: string;
+  }): Promise<{ payment: Payment; changed: boolean }> {
+    const actorId = input.actorId.trim();
+    if (!actorId) throw new PaymentOperationError(409, 'Administrator identity is required');
+    const reason = input.reason?.trim();
+    if (reason && reason.length > 500) throw new PaymentOperationError(409, 'Cancellation reason is too long');
+
+    const payment = await this.findPaymentByReference(input.reference);
+    if (!payment) throw new PaymentOperationError(404, 'Payment not found');
+    if (payment.status !== 'PENDING') return { payment, changed: false };
+
+    const provider = this.digitalProvider();
+    if (payment.provider !== provider.name || !payment.providerPaymentId) {
+      throw new PaymentOperationError(409, 'Only pending digital payments can be cancelled');
+    }
+
+    // Provider state is untrusted until identity, amount and currency match.
+    // Terminal provider state is reconciled through same atomic webhook path;
+    // no cancellation request is sent for PAID or other terminal states.
+    const state = await provider.getPayment(payment.providerPaymentId);
+    if (state.providerPaymentId !== payment.providerPaymentId
+      || state.reference !== payment.reference
+      || !Number.isSafeInteger(state.amountCents) || state.amountCents !== payment.amountCents
+      || state.currency !== payment.currency) {
+      throw new PaymentOperationError(409, 'Provider payment identity or amount mismatch');
+    }
+    if (state.status !== 'PENDING') {
+      if (isTerminalStatus(state.status)) {
+        return this.reconcilePaymentByReference(payment.reference);
+      }
+      throw new PaymentOperationError(409, 'Provider payment state cannot be cancelled');
+    }
+
+    // Idempotent provider adapters make retry safe. If this call fails, keep
+    // ledger PENDING; never claim cancellation without provider confirmation.
+    await provider.cancelPayment(payment.providerPaymentId);
+    const cancelledAt = this.now().toISOString();
+    const result = await this.options.repository.markCancelledByAdmin({
+      paymentId: payment.id,
+      provider: provider.name,
+      providerPaymentId: payment.providerPaymentId,
+      reference: payment.reference,
+      providerEventId: `admin_cancel:${payment.id}`,
+      eventId: randomUUID(),
+      actorId,
+      ...(reason ? { reason } : {}),
+      cancelledAt,
+    });
+    return { payment: result.payment, changed: result.changed };
   }
 
   /** Read ledger state and expire an overdue pending payment transactionally. */

@@ -43,6 +43,8 @@ export class InMemoryPaymentRepository implements PaymentRepository {
       .filter((payment) => !filters.method || (filters.method === 'CASH' ? payment.provider === 'CASH' : payment.provider !== 'CASH'))
       .filter((payment) => !filters.provider || payment.provider === filters.provider)
       .filter((payment) => !filters.createdBy || payment.createdBy === filters.createdBy)
+      .filter((payment) => filters.minAmountCents === undefined || payment.amountCents >= filters.minAmountCents)
+      .filter((payment) => filters.maxAmountCents === undefined || payment.amountCents <= filters.maxAmountCents)
       .filter((payment) => { const time = new Date(payment.createdAt).getTime(); return time >= from && time <= to; })
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     return values.slice(0, filters.limit ?? 100).map((payment) => structuredClone(payment));
@@ -120,6 +122,49 @@ export class InMemoryPaymentRepository implements PaymentRepository {
       };
       const next = { ...payment, status: 'EXPIRED' as const };
       this.payments.set(paymentId, next); this.events.set(event.id, event); this.eventIds.set(event.providerEventId, event);
+      return { payment: structuredClone(next), event: structuredClone(event), changed: true };
+    });
+  }
+
+  async markCancelledByAdmin(input: {
+    paymentId: string;
+    provider: string;
+    providerPaymentId: string;
+    reference: string;
+    providerEventId: string;
+    eventId: string;
+    actorId: string;
+    reason?: string;
+    cancelledAt: string;
+  }): Promise<{ payment: Payment; event: PaymentEvent | null; changed: boolean }> {
+    return this.withLock(input.paymentId, async () => {
+      const payment = this.payments.get(input.paymentId);
+      if (!payment) throw new Error('Payment not found');
+      const duplicate = this.eventIds.get(input.providerEventId);
+      if (duplicate) return { payment: structuredClone(payment), event: structuredClone(duplicate), changed: false };
+      if (payment.provider !== input.provider || payment.providerPaymentId !== input.providerPaymentId || payment.reference !== input.reference) {
+        throw new Error('Payment identity mismatch');
+      }
+      if (payment.status !== 'PENDING') return { payment: structuredClone(payment), event: null, changed: false };
+      const event: PaymentEvent = {
+        id: input.eventId,
+        paymentId: payment.id,
+        eventType: 'payment.cancelled.admin',
+        previousStatus: payment.status,
+        newStatus: 'CANCELLED',
+        provider: input.provider,
+        providerEventId: input.providerEventId,
+        rawPayload: {
+          source: 'admin_cancel',
+          actor_id: input.actorId,
+          ...(input.reason ? { reason: input.reason } : {}),
+        },
+        createdAt: input.cancelledAt,
+      };
+      const next: Payment = { ...payment, status: 'CANCELLED', cancelledAt: input.cancelledAt };
+      this.payments.set(payment.id, next);
+      this.events.set(event.id, event);
+      this.eventIds.set(event.providerEventId, event);
       return { payment: structuredClone(next), event: structuredClone(event), changed: true };
     });
   }

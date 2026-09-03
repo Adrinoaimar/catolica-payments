@@ -6,7 +6,15 @@ import { simulateMockPayment } from '../lib/demoStore'
 import { apiFetch } from '../lib/supabase'
 import type { Payment } from '../types'
 
-interface PaymentPageProps { payment: Payment; onPaid: (payment: Payment) => void; onNew: () => void; onSimulator: (payment: Payment) => void; demoMode?: boolean }
+interface PaymentPageProps {
+  payment: Payment
+  onPaid: (payment: Payment) => void
+  onNew: () => void
+  onSimulator: (payment: Payment) => void
+  onCancelled?: (payment: Payment) => void
+  canCancel?: boolean
+  demoMode?: boolean
+}
 
 type TerminalPaymentStatus = Exclude<Payment['status'], 'PENDING' | 'PAID'>
 
@@ -31,22 +39,53 @@ const terminalStatusCopy: Record<TerminalPaymentStatus, { eyebrow: string; title
   },
 }
 
-export function PaymentPage({ payment, onPaid, onNew, onSimulator, demoMode = false }: PaymentPageProps) {
+export function PaymentPage({ payment, onPaid, onNew, onSimulator, onCancelled, canCancel = false, demoMode = false }: PaymentPageProps) {
   const [current, setCurrent] = useState(payment)
   const [seconds, setSeconds] = useState(15 * 60)
   const [copied, setCopied] = useState(false)
   const [paying, setPaying] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
+  const [cancelError, setCancelError] = useState<string | null>(null)
   useEffect(() => { setCurrent(payment); setSeconds(Math.max(0, payment.expiresAt ? Math.floor((new Date(payment.expiresAt).getTime() - Date.now()) / 1000) : 15 * 60)) }, [payment])
   useEffect(() => { if (current.status !== 'PENDING') return; const interval = window.setInterval(() => setSeconds((value) => Math.max(0, value - 1)), 1000); return () => window.clearInterval(interval) }, [current.status])
+  useEffect(() => {
+    if (!demoMode || current.status !== 'PENDING' || seconds > 0) return
+    const expired = { ...current, status: 'EXPIRED' as const }
+    setCurrent(expired)
+    onPaid(expired)
+  }, [current, demoMode, onPaid, seconds])
   useEffect(() => { if (current.status !== 'PENDING') return; const poll = window.setInterval(async () => { try { const response = await apiFetch(`/api/payments/${encodeURIComponent(current.reference)}`); if (!response.ok) return; let remote = await response.json() as Payment; if (remote.status === 'PENDING' && !demoMode) { const reconciliation = await apiFetch(`/api/payments/${encodeURIComponent(current.reference)}/reconcile`, { method: 'POST' }); if (reconciliation.ok) { const body = await reconciliation.json() as { payment?: Payment }; if (body.payment) remote = body.payment } } if (remote.status !== 'PENDING') { setCurrent(remote); onPaid(remote) } } catch { /* transient network/provider failures retry on next interval */ } }, 15000); return () => window.clearInterval(poll) }, [current, demoMode, onPaid])
   const mins = String(Math.floor(seconds / 60)).padStart(2, '0'); const secs = String(seconds % 60).padStart(2, '0')
   async function handleCopy() { await navigator.clipboard?.writeText(current.reference); setCopied(true); window.setTimeout(() => setCopied(false), 1800) }
   async function fallbackDemoPay() { setPaying(true); const result = await simulateMockPayment(current); setCurrent(result); onPaid(result); setPaying(false) }
+  async function handleCancel() {
+    if (!canCancel || demoMode || current.status !== 'PENDING' || cancelling) return
+    if (!window.confirm('¿Confirmas cancelar este cobro pendiente? Esta acción no se puede deshacer.')) return
+    const reason = window.prompt('Motivo de cancelación (opcional):')
+    if (reason === null) return
+    setCancelling(true)
+    setCancelError(null)
+    try {
+      const response = await apiFetch(`/api/payments/${encodeURIComponent(current.reference)}/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason }),
+      })
+      const body = await response.json().catch(() => ({})) as { payment?: Payment; error?: unknown }
+      if (!response.ok || !body.payment) throw new Error(typeof body.error === 'string' ? body.error : 'No se pudo cancelar el cobro.')
+      setCurrent(body.payment)
+      onCancelled?.(body.payment)
+    } catch (error) {
+      setCancelError(error instanceof Error ? error.message : 'No se pudo cancelar el cobro.')
+    } finally {
+      setCancelling(false)
+    }
+  }
 
   if (current.status === 'PAID') return <div className="page-stack payment-page"><div className="payment-success"><div className="success-orb"><CheckIcon size={38} /></div><div className="eyebrow eyebrow--success">PAGO CONFIRMADO</div><h1>¡Pago recibido!</h1><div className="success-amount">{formatSoles(current.amountCents)}</div><p>La operación fue confirmada y registrada correctamente.</p><div className="success-reference"><span>Operación</span><strong>{current.reference}</strong></div><div className="success-actions"><button className="primary-button" onClick={onNew}>Nuevo cobro <ArrowIcon size={18} /></button><button className="secondary-button" onClick={handleCopy}><CopyIcon size={15} />{copied ? 'Referencia copiada' : 'Copiar referencia'}</button></div></div></div>
   if (current.status !== 'PENDING') {
     const terminal = terminalStatusCopy[current.status]
     return <div className="page-stack payment-page"><div className={`payment-terminal payment-terminal--${current.status.toLowerCase()}`} role="status" aria-live="polite"><div className="terminal-orb">{current.status === 'EXPIRED' ? <ClockIcon size={34} /> : current.status === 'CANCELLED' ? <CloseIcon size={34} /> : <InfoIcon size={34} />}</div><div className="eyebrow eyebrow--terminal">{terminal.eyebrow}</div><h1>{terminal.title}</h1><div className="terminal-amount">{formatSoles(current.amountCents)}</div><p>{terminal.description}</p><div className="terminal-reference"><div><span>Estado</span><strong>{terminal.label}</strong></div><div><span>Referencia</span><strong>{current.reference}</strong></div></div><div className="terminal-actions"><button className="primary-button" onClick={onNew}>Crear nuevo cobro <ArrowIcon size={18} /></button><button className="secondary-button" onClick={handleCopy}><CopyIcon size={15} />{copied ? 'Referencia copiada' : 'Copiar referencia'}</button></div><small className="terminal-note">El estado mostrado proviene del proveedor de pagos.</small></div></div>
   }
-  return <div className="page-stack payment-page"><div className="payment-heading"><button className="back-link" onClick={onNew}>← Volver a nueva cobranza</button><div className="eyebrow">COBRO DIGITAL</div><h1>Esperando el pago</h1><p>Comparte este código QR con tu cliente para completar el pago.</p></div><div className="payment-layout"><section className="panel payment-qr-card"><div className="payment-qr-card__head"><span className="live-pill live-pill--pending"><span className="status-dot status-dot--amber" /> Esperando confirmación</span><span className="secure-label"><InfoIcon size={14} /> Seguro</span></div><div className="qr-wrap">{current.qrCode ? <img className="provider-qr-image" src={current.qrCode} alt={`Código QR de ${current.reference}`} /> : demoMode ? <QrCode value={current.reference} /> : <div className="provider-qr-missing"><InfoIcon size={22} /><strong>QR no disponible</strong><small>El proveedor no devolvió un código QR para esta operación.</small></div>}{current.checkoutUrl && <a className="secondary-button provider-checkout-link" href={current.checkoutUrl} target="_blank" rel="noreferrer">Abrir checkout seguro <ArrowIcon size={15} /></a>}<div className="qr-scan-hint"><QrIcon size={16} /> Escanea con la billetera digital</div></div><div className="payment-amount-label">TOTAL A PAGAR</div><div className="payment-amount">{formatSoles(current.amountCents)}</div><div className="payment-reference"><span>Referencia</span><strong>{current.reference}</strong><button className="icon-button" onClick={handleCopy} aria-label="Copiar referencia"><CopyIcon size={16} />{copied && <em>Copiado</em>}</button></div></section><aside className="payment-details"><div className="panel expiry-card"><div className="expiry-card__icon"><ClockIcon size={20} /></div><div><span>Este código vence en</span><strong>{mins}:{secs}</strong></div><small>La operación se cancela automáticamente al vencer.</small></div><div className="panel operation-card"><div className="operation-card__title">DETALLE DE OPERACIÓN <span className="step-badge">03</span></div><div className="operation-row"><span>Monto</span><strong>{formatSoles(current.amountCents)}</strong></div><div className="operation-row"><span>Método</span><strong><span className="method-dot" /> Pago digital</strong></div><div className="operation-row"><span>Cajero</span><strong>{current.createdBy}</strong></div><div className="operation-row"><span>Creada</span><strong>{new Date(current.createdAt).toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' })}</strong></div></div>{demoMode && <div className="panel simulator-card"><div><span className="simulator-card__icon">⚙</span><p><strong>¿Estás probando el sistema?</strong><small>Usa el simulador para confirmar este pago.</small></p></div><button className="secondary-button" disabled={paying} onClick={() => onSimulator(current)}>Abrir simulador <ArrowIcon size={15} /></button><button className="ghost-demo-button" disabled={paying} onClick={fallbackDemoPay}>{paying ? 'Procesando…' : 'Confirmar demo rápidamente'}</button></div>}</aside></div></div>
+  return <div className="page-stack payment-page"><div className="payment-heading"><button className="back-link" onClick={onNew}>← Volver a nueva cobranza</button><div className="eyebrow">COBRO DIGITAL</div><h1>Esperando el pago</h1><p>Comparte este código QR con tu cliente para completar el pago.</p></div><div className="payment-layout"><section className="panel payment-qr-card"><div className="payment-qr-card__head"><span className="live-pill live-pill--pending"><span className="status-dot status-dot--amber" /> Esperando confirmación</span><span className="secure-label"><InfoIcon size={14} /> Seguro</span></div><div className="qr-wrap">{current.qrCode ? <img className="provider-qr-image" src={current.qrCode} alt={`Código QR de ${current.reference}`} /> : demoMode ? <QrCode value={current.reference} /> : <div className="provider-qr-missing"><InfoIcon size={22} /><strong>QR no disponible</strong><small>El proveedor no devolvió un código QR para esta operación.</small></div>}{current.checkoutUrl && <a className="secondary-button provider-checkout-link" href={current.checkoutUrl} target="_blank" rel="noreferrer">Abrir checkout seguro <ArrowIcon size={15} /></a>}<div className="qr-scan-hint"><QrIcon size={16} /> Escanea con la billetera digital</div></div><div className="payment-amount-label">TOTAL A PAGAR</div><div className="payment-amount">{formatSoles(current.amountCents)}</div><div className="payment-reference"><span>Referencia</span><strong>{current.reference}</strong><button className="icon-button" onClick={handleCopy} aria-label="Copiar referencia"><CopyIcon size={16} />{copied && <em>Copiado</em>}</button></div></section><aside className="payment-details"><div className="panel expiry-card"><div className="expiry-card__icon"><ClockIcon size={20} /></div><div><span>Este código vence en</span><strong>{mins}:{secs}</strong></div><small>La operación se cancela automáticamente al vencer.</small></div><div className="panel operation-card"><div className="operation-card__title">DETALLE DE OPERACIÓN <span className="step-badge">03</span></div><div className="operation-row"><span>Monto</span><strong>{formatSoles(current.amountCents)}</strong></div><div className="operation-row"><span>Método</span><strong><span className="method-dot" /> Pago digital</strong></div><div className="operation-row"><span>Cajero</span><strong>{current.createdBy}</strong></div><div className="operation-row"><span>Creada</span><strong>{new Date(current.createdAt).toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' })}</strong></div></div>{canCancel && !demoMode && <div className="panel cancel-card"><div><span className="cancel-card__icon"><CloseIcon size={16} /></span><p><strong>Acción administrativa</strong><small>Solo puedes cancelar mientras el proveedor siga en estado pendiente.</small></p></div><button className="secondary-button cancel-payment-button" disabled={cancelling} onClick={handleCancel}>{cancelling ? 'Cancelando…' : 'Cancelar cobro'}</button>{cancelError && <div className="form-error" role="alert"><InfoIcon size={14} /> {cancelError}</div>}</div>}{demoMode && <div className="panel simulator-card"><div><span className="simulator-card__icon">⚙</span><p><strong>¿Estás probando el sistema?</strong><small>Usa el simulador para confirmar este pago.</small></p></div><button className="secondary-button" disabled={paying} onClick={() => onSimulator(current)}>Abrir simulador <ArrowIcon size={15} /></button><button className="ghost-demo-button" disabled={paying} onClick={fallbackDemoPay}>{paying ? 'Procesando…' : 'Confirmar demo rápidamente'}</button></div>}</aside></div></div>
 }

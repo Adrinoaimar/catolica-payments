@@ -4,6 +4,7 @@ import { MenuIcon, PlusIcon, SearchIcon, DownloadIcon, FilterIcon, ArrowIcon, Ch
 import { BrandMark } from './components/BrandMark'
 import { LoginPage } from './pages/LoginPage'
 import { CashierPage } from './pages/CashierPage'
+import { BackOfficePage } from './pages/BackOfficePage'
 import { PaymentPage } from './pages/PaymentPage'
 import { listPayments, loadPayments, savePayments, simulateMockPayment } from './lib/demoStore'
 import { formatSoles } from './lib/format'
@@ -24,6 +25,11 @@ function App() {
   const [path, setPath] = useState(() => window.location.pathname)
   useEffect(() => { const sync = () => { const next = loadPayments(); setPayments(next); setActivePayment((current) => current ? next.find((item) => item.reference === current.reference) ?? current : current) }; window.addEventListener('catolica:payments-updated', sync); window.addEventListener('storage', sync); return () => { window.removeEventListener('catolica:payments-updated', sync); window.removeEventListener('storage', sync) } }, [])
   useEffect(() => { const syncPath = () => setPath(window.location.pathname); window.addEventListener('popstate', syncPath); return () => window.removeEventListener('popstate', syncPath) }, [])
+  useEffect(() => {
+    if (!user || path !== '/login') return
+    window.history.replaceState({}, '', '/')
+    setPath('/')
+  }, [user, path])
   useEffect(() => {
     if (!user) { setPayments(loadPayments()); setLedgerError(null); setRealtimeHealthy(false); return }
     let active = true
@@ -104,9 +110,13 @@ function App() {
   const create = (payment: Payment) => { setPayments((current) => [payment, ...current.filter((item) => item.id !== payment.id)]); setActivePayment(payment) }
   const logout = () => { void signOut().finally(() => setActivePayment(null)) }
   const newCharge = () => { setActivePayment(null); setSection('cashier') }
+  const cancelledPayment = (payment: Payment) => {
+    setPayments((current) => upsertPayment(current, payment))
+    setActivePayment(payment)
+  }
 
-  return <div className="app-shell"><Sidebar user={user} section={section} onNavigate={(next) => { setSection(next); setActivePayment(null) }} onLogout={logout} open={mobileMenu} onClose={() => setMobileMenu(false)} />
-    <div className="main-shell"><header className="topbar"><button className="mobile-menu" aria-label="Abrir menú" onClick={() => setMobileMenu(true)}><MenuIcon size={22} /></button><div className="topbar-title"><span className="topbar-kicker">GRUPO LA CATÓLICA</span><span className="topbar-context">/ {activePayment ? 'Cobro digital' : section === 'cashier' ? 'Punto de cobro' : section === 'dashboard' ? 'Resumen general' : section === 'operations' ? 'Operaciones' : 'Reportes'}</span></div><div className="topbar-actions"><button className="icon-button topbar-search" aria-label="Buscar"><SearchIcon size={19} /></button><span className="topbar-divider" /><span className="avatar">{user.initials}</span><span className="topbar-user"><strong>{user.name}</strong><small>{user.role === 'ADMIN' ? 'Administrador' : 'Cajero'}</small></span></div></header><main className="content-shell">{ledgerError && <div className="form-error" role="alert"><InfoIcon size={16} /> {ledgerError}</div>}{activePayment ? <PaymentPage payment={activePayment} onPaid={paidPayment} onNew={newCharge} demoMode={isDemoMode} onSimulator={(payment) => { const popup = window.open(`/dev/mock-payment/${payment.reference}`, '_blank', 'noopener,noreferrer'); if (!popup) { window.history.pushState({}, '', `/dev/mock-payment/${payment.reference}`); window.dispatchEvent(new PopStateEvent('popstate')) } }} /> : section === 'cashier' ? <CashierPage user={user} onCreated={create} /> : <BackOffice section={section} payments={payments} user={user} onNew={newCharge} />}</main></div></div>
+   return <div className="app-shell"><Sidebar user={user} section={section} onNavigate={(next) => { setSection(next); setActivePayment(null) }} onLogout={logout} open={mobileMenu} onClose={() => setMobileMenu(false)} />
+     <div className="main-shell"><header className="topbar"><button className="mobile-menu" aria-label="Abrir menú" onClick={() => setMobileMenu(true)}><MenuIcon size={22} /></button><div className="topbar-title"><span className="topbar-kicker">GRUPO LA CATÓLICA</span><span className="topbar-context">/ {activePayment ? 'Cobro digital' : section === 'cashier' ? 'Punto de cobro' : section === 'dashboard' ? 'Resumen general' : section === 'operations' ? 'Operaciones' : 'Reportes'}</span></div><div className="topbar-actions"><button className="icon-button topbar-search" aria-label="Buscar"><SearchIcon size={19} /></button><span className="topbar-divider" /><span className="avatar">{user.initials}</span><span className="topbar-user"><strong>{user.name}</strong><small>{user.role === 'ADMIN' ? 'Administrador' : 'Cajero'}</small></span></div></header><main className="content-shell">{ledgerError && <div className="form-error" role="alert"><InfoIcon size={16} /> {ledgerError}</div>}{activePayment ? <PaymentPage payment={activePayment} onPaid={paidPayment} onCancelled={cancelledPayment} canCancel={user.role === 'ADMIN'} onNew={newCharge} demoMode={isDemoMode} onSimulator={(payment) => { const popup = window.open(`/dev/mock-payment/${payment.reference}`, '_blank', 'noopener,noreferrer'); if (!popup) { window.history.pushState({}, '', `/dev/mock-payment/${payment.reference}`); window.dispatchEvent(new PopStateEvent('popstate')) } }} /> : section === 'cashier' ? <CashierPage user={user} onCreated={create} /> : <BackOfficePage section={section} payments={payments} user={user} onNew={newCharge} onOpenPayment={setActivePayment} />}</main></div></div>
 }
 
 function upsertPayment(current: Payment[], next: Payment): Payment[] {

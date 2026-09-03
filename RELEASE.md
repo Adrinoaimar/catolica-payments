@@ -10,7 +10,7 @@ Antes de desplegar, ejecute `npm run verify:production` con las variables cargad
 
 ## Migraciones y Realtime
 
-Ejecute en orden todas las migraciones de `supabase/migrations/`, incluida `20260902000002_realtime_payment_updates.sql`. Después cree al menos un usuario Auth y su fila `user_roles` con `ADMIN` o `CASHIER`. Verifique que el canal `payment_updates` se suscribe con sesión autenticada y que `provider_data` nunca aparece en el payload público.
+Ejecute en orden todas las migraciones de `supabase/migrations/`, incluidas `20260902000002_realtime_payment_updates.sql` y `20260902000003_admin_cancellation.sql`. Después cree al menos un usuario Auth y su fila `user_roles` con `ADMIN` o `CASHIER`. Verifique que el canal `payment_updates` se suscribe con sesión autenticada y que `provider_data` nunca aparece en el payload público.
 
 ## Smoke test antes de dinero real
 

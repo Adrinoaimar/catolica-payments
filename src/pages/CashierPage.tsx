@@ -13,7 +13,7 @@ export function CashierPage({ user, onCreated }: CashierPageProps) {
   const [custom, setCustom] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const selectedAmount = amount ?? (custom ? Math.round(Number(custom.replace(',', '.')) * 100) : 0)
+  const selectedAmount = amount ?? parseSolesToCents(custom)
 
   async function handleCreate() {
     if (selectedAmount <= 0 || busy) return
@@ -39,4 +39,13 @@ export function CashierPage({ user, onCreated }: CashierPageProps) {
       <aside className="panel cashier-preview"><div className="preview-label"><span className="preview-label__icon"><ClockIcon size={16} /></span> VISTA PREVIA</div><div className="preview-card"><div className="preview-card__top"><span className="mini-brand">LC</span><span className="preview-card__status">NUEVO COBRO</span></div><div className="preview-card__amount">{selectedAmount > 0 ? formatSoles(selectedAmount) : 'S/ 0.00'}</div><div className="preview-card__method"><span className={`preview-method-dot ${method === 'CASH' ? 'preview-method-dot--cash' : ''}`} /> {method === 'CASH' ? 'Pago en efectivo' : 'Pago digital'}</div>{method === 'DIGITAL' ? <div className="preview-qr-placeholder"><QrIcon size={30} /><span>El QR aparecerá aquí</span></div> : <div className="preview-cash-message"><CashIcon size={30} /><span>Listo para registrar<br />pago en caja</span></div>}<div className="preview-card__footer">Grupo La Católica <span>•</span> PEN</div></div><div className="preview-tip"><span>✦</span><p><strong>Cobro rápido</strong><br />Con los montos rápidos puedes generar una operación en un solo toque.</p></div></aside>
     </div>
   </div>
+}
+
+/** Parse user-entered soles without converting money through a floating point number. */
+function parseSolesToCents(value: string): number {
+  const normalized = value.trim().replace(',', '.')
+  if (!normalized || !/^\d+(?:\.\d{0,2})?$/.test(normalized)) return 0
+  const [whole, decimals = ''] = normalized.split('.')
+  const cents = Number(whole) * 100 + Number(decimals.padEnd(2, '0'))
+  return Number.isSafeInteger(cents) ? cents : 0
 }

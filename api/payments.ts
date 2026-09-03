@@ -49,7 +49,7 @@ export default async function handler(request: ApiRequest, response: ApiResponse
   } catch (error) { sendError(response, error); }
 }
 
-function parseFilters(query: ApiRequest['query'], role: 'ADMIN' | 'CASHIER') {
+export function parseFilters(query: ApiRequest['query'], role: 'ADMIN' | 'CASHIER') {
   const status = optionalQuery(query, 'status')?.toUpperCase();
   if (status && !STATUSES.includes(status as PaymentStatus)) throw new HttpError(400, 'Invalid status filter');
   const method = optionalQuery(query, 'method')?.toUpperCase();
@@ -61,6 +61,11 @@ function parseFilters(query: ApiRequest['query'], role: 'ADMIN' | 'CASHIER') {
   const from = optionalDate(query, 'from');
   const to = optionalDate(query, 'to');
   if (from && to && from > to) throw new HttpError(400, 'Invalid date range');
+  const minAmountCents = optionalAmountFilter(query, 'minAmountCents');
+  const maxAmountCents = optionalAmountFilter(query, 'maxAmountCents');
+  if (minAmountCents !== undefined && maxAmountCents !== undefined && minAmountCents > maxAmountCents) {
+    throw new HttpError(400, 'Invalid amount range');
+  }
   const rawLimit = optionalQuery(query, 'limit');
   const limit = rawLimit === undefined ? 100 : Number(rawLimit);
   if (!Number.isInteger(limit) || limit < 1 || limit > 200) throw new HttpError(400, 'limit must be between 1 and 200');
@@ -71,6 +76,8 @@ function parseFilters(query: ApiRequest['query'], role: 'ADMIN' | 'CASHIER') {
     ...(createdBy ? { createdBy } : {}),
     ...(from ? { from } : {}),
     ...(to ? { to } : {}),
+    ...(minAmountCents !== undefined ? { minAmountCents } : {}),
+    ...(maxAmountCents !== undefined ? { maxAmountCents } : {}),
     limit,
   };
 }
@@ -89,4 +96,13 @@ function optionalDate(query: ApiRequest['query'], key: string): string | undefin
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) throw new HttpError(400, `Invalid ${key} date`);
   return date.toISOString();
+}
+
+function optionalAmountFilter(query: ApiRequest['query'], key: string): number | undefined {
+  const value = optionalQuery(query, key);
+  if (!value) return undefined;
+  if (!/^\d+$/.test(value)) throw new HttpError(400, `${key} must be a non-negative integer`);
+  const amount = Number(value);
+  if (!Number.isSafeInteger(amount)) throw new HttpError(400, `${key} is too large`);
+  return amount;
 }
