@@ -32,7 +32,7 @@ Para ejecutar también las funciones `api/` localmente:
 npx vercel@latest dev
 ```
 
-Aplica [database/migrations/0001_initial.sql](database/migrations/0001_initial.sql) una sola vez en el SQL Editor de Neon. Luego crea el primer usuario en Firebase y añade manualmente su rol inicial:
+Aplica [database/migrations/0001_initial.sql](database/migrations/0001_initial.sql) una sola vez en el SQL Editor de Neon o ejecuta `npm run db:migrate` con `DATABASE_URL` cargada. El script usa una transacción y no imprime la cadena de conexión. Luego crea el primer usuario en Firebase y añade manualmente su rol inicial:
 
 ```sql
 insert into public.user_roles (user_id, role) values ('UID_FIREBASE', 'ADMIN');
@@ -47,6 +47,31 @@ npm test
 npm run typecheck
 npm run build
 ```
+
+Preflight reproducible para sandbox TAYPI (no crea cobros; no imprime secretos):
+
+```bash
+node scripts/verify-taypi-sandbox.mjs --network
+```
+
+El smoke E2E crea un único cobro de prueba, reintenta con la misma
+`Idempotency-Key`, consulta el ledger y espera el webhook. Requiere un
+`FIREBASE_ID_TOKEN` temporal de un usuario con rol `CASHIER` y confirmación
+explícita de sandbox:
+
+```bash
+# PowerShell
+$env:APP_BASE_URL='https://TU-PREVIEW.vercel.app'
+$env:FIREBASE_ID_TOKEN='TOKEN_TEMPORAL'
+$env:TAYPI_SMOKE_CONFIRM='SANDBOX_ONLY'
+$env:SMOKE_AMOUNT_CENTS='100'
+node scripts/smoke-taypi.mjs
+```
+
+Escanea el QR en `https://sandbox.taypi.pe/simulator`. Si termina pendiente,
+reanuda sin crear otro cobro usando `SMOKE_REFERENCE=<referencia>` y un
+`SMOKE_WAIT_SECONDS` mayor. `SMOKE_ALLOW_PENDING=true` sirve solo para validar
+creación/lectura antes de abrir el simulador.
 
 El flujo mock local es útil para verificar idempotencia, expiración y auditoría sin dinero:
 
@@ -73,6 +98,12 @@ TAYPI_WEBHOOK_SECRET=...
 TAYPI_SANDBOX=true
 TAYPI_API_URL=https://sandbox.taypi.pe
 ```
+
+Las claves sandbox tienen formato `taypi_pk_test_` más 32 hexadecimales y
+`taypi_sk_test_` más 64 hexadecimales. Sandbox simula pagos: sus QR no se
+pueden pagar con Yape/Plin reales; usa el simulador de TAYPI. En producción,
+el mismo QR interoperable puede ser pagado desde Yape, Plin y billeteras
+compatibles.
 
 Activa producción solo con claves `*_live_*`, cuenta TAYPI verificada y webhook HTTPS configurado en `https://<dominio>/api/webhooks/taypi`. Antes de aceptar dinero real se debe completar KYB y hacer una operación controlada.
 

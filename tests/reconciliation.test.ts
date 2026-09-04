@@ -205,8 +205,8 @@ describe('reconciliation cron authentication', () => {
     expect(() => createPaymentProvider({
       NODE_ENV: 'production',
       PAYMENT_PROVIDER: 'taypi',
-      TAYPI_PUBLIC_KEY: 'taypi_pk_live_demo',
-      TAYPI_SECRET_KEY: 'taypi_sk_live_demo',
+      TAYPI_PUBLIC_KEY: `taypi_pk_live_${'a'.repeat(32)}`,
+      TAYPI_SECRET_KEY: `taypi_sk_live_${'b'.repeat(64)}`,
       TAYPI_WEBHOOK_SECRET: 'webhook',
       TAYPI_SANDBOX: 'true',
     })).toThrow('not allowed in production');

@@ -45,10 +45,13 @@ jobs:
           FIREBASE_PRIVATE_KEY: ci-private-key
           CRON_SECRET: ci-cron-secret-placeholder-32-characters-long
           PAYMENT_PROVIDER: taypi
-          TAYPI_PUBLIC_KEY: taypi_pk_live_ci_placeholder
-          TAYPI_SECRET_KEY: taypi_sk_live_ci_placeholder
+          TAYPI_PUBLIC_KEY: ci-live-public-placeholder
+          TAYPI_SECRET_KEY: ci-live-secret-placeholder
           TAYPI_WEBHOOK_SECRET: ci-taypi-webhook-placeholder
           TAYPI_API_URL: https://app.taypi.pe
           TAYPI_SANDBOX: 'false'
           VITE_DEMO_MODE: 'false'
-        run: npm run verify:production
+        run: |
+          export TAYPI_PUBLIC_KEY="taypi_pk_live_$(printf 'a%.0s' {1..32})"
+          export TAYPI_SECRET_KEY="taypi_sk_live_$(printf 'b%.0s' {1..64})"
+          npm run verify:production

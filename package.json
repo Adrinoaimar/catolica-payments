@@ -11,7 +11,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "verify:production": "node scripts/verify-production-env.mjs"
+    "verify:production": "node scripts/verify-production-env.mjs",
+    "verify:taypi:sandbox": "node scripts/verify-taypi-sandbox.mjs",
+    "smoke:taypi": "node scripts/smoke-taypi.mjs",
+    "db:migrate": "node scripts/migrate-neon.mjs"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",

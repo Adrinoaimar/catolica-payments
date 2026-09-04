@@ -40,8 +40,8 @@ if (/^taypi_(?:pk|sk)_test_/i.test(String(env.TAYPI_PUBLIC_KEY ?? '').trim())
   errors.push('TAYPI test keys must not be used in production')
 }
 
-if (!/^taypi_pk_live_[A-Za-z0-9_-]+$/.test(String(env.TAYPI_PUBLIC_KEY ?? '').trim())
-  || !/^taypi_sk_live_[A-Za-z0-9_-]+$/.test(String(env.TAYPI_SECRET_KEY ?? '').trim())) {
+if (!/^taypi_pk_live_[a-f0-9]{32}$/i.test(String(env.TAYPI_PUBLIC_KEY ?? '').trim())
+  || !/^taypi_sk_live_[a-f0-9]{64}$/i.test(String(env.TAYPI_SECRET_KEY ?? '').trim())) {
   errors.push('TAYPI live keys are required in production')
 }
 
