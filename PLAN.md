@@ -7,7 +7,7 @@ Construir una caja web para Grupo La Católica que genere cobros digitales por o
 ## Alcance de Fase 1 (MVP)
 
 1. Proyecto React/Vite/TypeScript con interfaz responsive para celular, tablet y PC.
-2. Supabase Auth, PostgreSQL, migraciones, índices, constraints y RLS.
+2. Neon PostgreSQL, migraciones, índices, constraints y transacciones; Firebase Authentication Spark para identidades.
 3. Modelo `payments` con dinero en centavos, estados explícitos y referencia única `CAT-YYYYMMDD-XXXXXX`.
 4. Modelo de auditoría `payment_events` para cada cambio financiero.
 5. Contrato `PaymentProvider` y selector por `PAYMENT_PROVIDER`.
@@ -22,12 +22,12 @@ Construir una caja web para Grupo La Católica que genere cobros digitales por o
 ### Fase 1 — MVP verificable
 
 - [x] Instalar dependencias y configurar scripts `test` y `build`.
-- [x] Crear migraciones y políticas RLS.
-- [x] Implementar autenticación y autorización por rol (`ADMIN`, `CASHIER`).
+- [x] Crear migración Neon consolidada y funciones/privilegios server-side.
+- [x] Implementar Firebase Authentication y autorización por rol (`ADMIN`, `CASHIER`).
 - [x] Implementar servicio de pagos y adaptador mock.
 - [x] Implementar endpoints de cobro, efectivo, consulta y `/api/webhooks/mock`.
 - [x] Deshabilitar `/dev/mock-payment/:reference` en producción.
-- [x] Conectar actualización de estado con Supabase Realtime y polling controlado.
+- [x] Conectar actualización de estado con polling controlado (sin servicio Realtime de pago).
 - [x] Proteger la UI frente a respuestas fuera de orden y resincronizar al recuperar foco.
 - [x] Ejecutar `npm install`, `npm test` y `npm run build`.
 
@@ -87,8 +87,22 @@ Construir una caja web para Grupo La Católica que genere cobros digitales por o
 ## Secuencia de validación antes de publicar
 
 1. Revisar `git diff` y secretos con un escáner local.
-2. Aplicar migraciones en un proyecto Supabase de prueba.
-3. Ejecutar tests y build de producción.
-4. Probar login, cobro mock, webhook duplicado, monto incorrecto, expiración y efectivo.
-5. Revisar rutas de webhook, cabeceras y variables en Vercel.
-6. Crear commit descriptivo y conectar `main` a despliegue automático.
+2. Aplicar `database/migrations/0001_initial.sql` en un proyecto Neon de prueba.
+3. Configurar Firebase Email/Password, dominio autorizado y el primer `ADMIN`.
+4. Ejecutar tests, typecheck y build de producción.
+5. Probar login, cobro mock local, webhook duplicado, monto incorrecto, expiración y efectivo.
+6. Probar TAYPI sandbox con webhook HTTPS, reintentos y conciliación.
+7. Solo después de KYB y claves live, ejecutar una operación real controlada.
+8. Crear commit descriptivo y conectar `main` a despliegue automático.
+
+## DAG de migración y rollback
+
+```text
+Neon migration → Firebase project/ADMIN → Vercel env → TAYPI sandbox
+       └─────────────── tests/build ────────────────┘
+```
+
+Cada etapa depende de la anterior. El rollback operativo conserva el ledger y
+`payment_events`: se desactiva el alias o se vuelve al deployment anterior; no
+se eliminan tablas ni se cambian estados manualmente. El mock queda limitado a
+desarrollo local.

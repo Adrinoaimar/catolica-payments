@@ -1,5 +1,5 @@
 import type { Payment, PaymentMethod, PaymentStatus } from '../types'
-import { apiFetch, isDemoMode } from './supabase'
+import { apiFetch, isDemoMode } from './firebase'
 
 export type ReportPeriod = 'ALL' | 'DAY' | 'WEEK' | 'MONTH' | 'CUSTOM'
 

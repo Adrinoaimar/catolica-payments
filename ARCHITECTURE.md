@@ -2,159 +2,65 @@
 
 ## Principios
 
-1. El backend es autoridad financiera. El navegador solo solicita operaciones y observa su estado.
-2. Cada intento tiene `reference` y `provider_payment_id` únicos. El monto nunca identifica una operación.
-3. El dominio depende de `PaymentProvider`, no de Taypi, Culqi o Mercado Pago.
-4. Todas las transiciones financieras dejan una fila de auditoría.
-5. Dinero se representa como enteros en centavos y moneda explícita (`PEN`).
+1. El backend es la única autoridad financiera.
+2. Cada intento tiene `reference`, `provider_payment_id` e idempotencia.
+3. El dominio depende de `PaymentProvider`, no de la empresa que procesa el pago.
+4. Cada transición deja una fila de auditoría.
+5. El dinero se representa como enteros en centavos (`PEN`).
 
 ## Capas
 
 ```text
-React/Vite UI
-    |
-API serverless + Auth/RBAC
-    |
-Payment service (reglas, dinero, estados, idempotencia)
-    |                    \
-Supabase PostgreSQL       PaymentProvider adapter
-                           |-- Mock
-                           |-- Taypi
-                           |-- Culqi
-                           `-- Mercado Pago
+React/Vite
+  ↓ Bearer Firebase ID token
+Vercel Functions (validación, RBAC, webhook)
+  ↓ server-only DATABASE_URL
+Neon PostgreSQL (ledger SQL, constraints, funciones atómicas)
+  ↘ TAYPI / Mock PaymentProvider
 ```
 
-La UI contiene presentación, selección rápida, accesibilidad, contador y suscripción de cambios. Las funciones serverless validan sesión y rol para acciones internas, y validan firma para webhooks. El servicio de pagos concentra reglas que deben ser iguales para todos los proveedores.
+Firebase Authentication solo gestiona identidad. Neon conserva `user_roles`, por lo que una interfaz manipulada no puede elevar privilegios con metadata del navegador.
 
-## Contrato de proveedor
-
-La interfaz debe expresar datos normalizados, sin filtrar tipos del SDK externo al dominio:
-
-```ts
-interface PaymentProvider {
-  createPayment(input: CreatePaymentInput): Promise<ProviderCheckout>;
-  getPayment(input: GetPaymentInput): Promise<ProviderPayment>;
-  verifyWebhook(input: VerifyWebhookInput): Promise<ProviderWebhookEvent>;
-  cancelPayment(input: CancelPaymentInput): Promise<void>;
-}
-```
-
-El selector lee `PAYMENT_PROVIDER` en el servidor. `MockPaymentProvider` usa un QR claramente identificado como prueba y entrega un evento al endpoint mock; no escribe directamente en `payments`. Los adaptadores reales encapsulan autenticación, formato de checkout/QR, consulta, cancelación, expiración, HMAC y mapeo de estados.
-
-## Flujo de cobro digital
+## Flujo digital
 
 ```text
-CASHIER selecciona monto
-  -> POST /api/payments
-  -> validar sesión, rol, monto y límites
-  -> generar referencia CAT-YYYYMMDD-XXXXXX
-  -> insertar intent payment PENDING (provider_payment_id NULL)
-  -> crear/reusar checkout mediante proveedor con la misma referencia
-  -> adjuntar provider_payment_id y datos no sensibles en RPC con bloqueo
-  -> mostrar QR y referencia
-  -> proveedor envía webhook
-  -> verificar firma y normalizar evento
-  -> buscar reference + provider_payment_id
-  -> comparar amount_cents/currency y estado
-  -> transacción atómica + payment_events
-  -> PENDING pasa a PAID
-  -> UI recibe Realtime/polling y muestra éxito
+CASHIER → POST /api/payments
+  → persistir intención PENDING
+  → crear checkout TAYPI y adjuntar ID externo
+  → mostrar QR
+  → webhook firmado del proveedor
+  → validar identidad, importe, moneda e idempotencia
+  → función SQL bloquea la fila y escribe payment_events
+  → PENDING pasa a PAID/FAILED/EXPIRED/CANCELLED
+  → UI consulta el ledger con polling mientras siga pendiente
 ```
 
-La creación de la operación y de la sesión externa debe tolerar fallos: si el proveedor o la escritura posterior fallan, la intención queda `PENDING` sin confirmar dinero y puede recuperarse mediante el mismo `Idempotency-Key` o la reconciliación server-side. Incluso si ya pasó el vencimiento local, una intención sin `provider_payment_id` se reintenta de forma idempotente antes de cerrarse, porque la respuesta perdida podría ocultar un checkout ya creado. Nunca se cancela una sesión externa ambigua. Un QR expirado nunca se reutiliza.
-
-## Flujo de efectivo
-
-`POST /api/payments/cash` exige sesión `CASHIER` o `ADMIN`, monto positivo y confirmación explícita. El backend crea la operación con `provider=CASH`, `status=PAID`, `paid_at=now()` y `created_by` del usuario. No llama proveedor ni webhook. La auditoría conserva el registro del usuario y del método.
-
-## Estados
-
-Estados permitidos: `PENDING`, `PAID`, `FAILED`, `EXPIRED`, `CANCELLED`.
-
-Transiciones normales:
-
-```text
-PENDING -> PAID       webhook válido o efectivo confirmado
-PENDING -> FAILED     rechazo definitivo del proveedor
-PENDING -> EXPIRED    límite de 15 minutos alcanzado
-PENDING -> CANCELLED  cancelación autorizada
-```
-
-`PAID`, `FAILED`, `EXPIRED` y `CANCELLED` son terminales para el webhook. Un cajero nunca puede editar manualmente una operación terminal. La expiración debe ejecutarse en backend (job, función invocada o comprobación transaccional al leer/escribir), no confiar en un temporizador del navegador.
-
-## Idempotencia y concurrencia
-
-`payments.reference`, `payments.provider_payment_id` y la identidad del evento del proveedor deben tener constraints únicos. El handler de webhook:
-
-1. Verifica autenticidad antes de usar datos del payload.
-2. Busca operación por referencia y proveedor/payment ID.
-3. Toma la fila o usa una función SQL transaccional.
-4. Revisa que el estado aún sea procesable.
-5. Comprueba monto y moneda en centavos.
-6. Inserta `payment_events` con `provider_event_id` único.
-7. Cambia estado y `paid_at` en la misma transacción.
-
-Reintentos concurrentes reciben resultado idempotente; una misma confirmación no suma dos veces ni crea dos eventos financieros. La intención digital se persiste antes de contactar al proveedor y `attach_payment_provider` bloquea la fila, rechaza sustituir un ID externo y permite que el cron recupere un ID perdido.
+Una respuesta del navegador, un contador o un QR nunca cambia el estado financiero. Una captura TAYPI tardía puede pasar `EXPIRED → PAID` si el proveedor la confirma y los importes coinciden.
 
 ## Modelo de datos
 
-`payments` contiene como mínimo:
+La migración [database/migrations/0001_initial.sql](database/migrations/0001_initial.sql) crea `payments`, `payment_events`, `user_roles`, `quick_amounts`, `webhook_receipts`, `job_locks` y `api_rate_limits`. Las claves externas del ledger y los índices de referencia, estado, proveedor y fecha protegen consultas y reintentos. Los UID de Firebase se almacenan como `text`.
 
-```text
-id UUID PRIMARY KEY
-reference TEXT UNIQUE NOT NULL
-amount_cents INTEGER NOT NULL
-currency TEXT NOT NULL DEFAULT 'PEN'
-provider TEXT NOT NULL
-provider_payment_id TEXT UNIQUE
-status TEXT NOT NULL
-created_by UUID
-created_at TIMESTAMP
-expires_at TIMESTAMP
-paid_at TIMESTAMP
-cancelled_at TIMESTAMP
-provider_data JSONB
-```
+Las funciones `apply_payment_webhook`, `record_cash_payment`, `attach_payment_provider`, `expire_payment`, `cancel_payment`, `admin_set_user_role`, `acquire_job_lock` y `consume_api_rate_limit` ejecutan las mutaciones en Neon. No se expone una credencial de base de datos al navegador.
 
-`payment_events` conserva `payment_id`, `event_type`, estados anterior/nuevo, proveedor, `provider_event_id` único, `raw_payload` y `created_at`. El payload crudo debe minimizar datos personales y cifrarse o restringirse según el entorno.
+## Roles
 
-Índices previstos: referencia, fecha de creación, estado, proveedor/payment ID, `created_by` y fecha de eventos. Constraints validan monto positivo, moneda soportada, estados y consistencia de timestamps.
+- `CASHIER`: crear cobros digitales/efectivo y consultar operaciones del día calendario de Lima.
+- `ADMIN`: todo lo anterior, reportes globales, montos rápidos, usuarios y cancelaciones pendientes.
+- Ningún cliente puede escribir `PAID`, cambiar auditoría o leer secretos.
 
-## Auth, roles y RLS
+El backend verifica el ID token con Firebase Admin y luego obtiene el rol desde `user_roles`. La creación del primer administrador es una operación manual documentada en README; después los cambios pasan por la función SQL serializada.
 
-Supabase Auth identifica al usuario. El perfil/claim de rol permite `ADMIN` y `CASHIER`.
+## Webhooks y conciliación
 
-- `CASHIER`: crear cobros digitales/efectivo y leer únicamente operaciones del día calendario de Lima (incluidos pagos confirmados).
-- `ADMIN`: alcance global, estadísticas, usuarios, montos rápidos, cancelación de pendientes y reportes.
-- Ningún cliente: escribir `PAID`, modificar `provider_payment_id`, editar auditoría o leer secretos.
-- Webhooks: rutas públicas limitadas a verificación criptográfica y servicio server-side; no se abre RLS al anónimo.
+Un webhook es un POST HTTPS del proveedor al endpoint `/api/webhooks/<provider>`. El endpoint conserva solo el hash/resultado de entrega en `webhook_receipts`; el payload financiero auditado queda en `payment_events`. La firma HMAC y el timestamp se validan antes de cualquier transición.
 
-El cliente usa anon key con RLS. La service-role key solo existe en serverless y no se importa en módulos del navegador.
+`/api/cron/reconcile-payments` consulta TAYPI server-side como respaldo. Usa `job_locks` y límites distribuidos en Neon. Vercel Hobby no garantiza cron cada cinco minutos; en ese plan se usa un scheduler externo o invocación manual hasta contar con un entorno operativo adecuado.
 
-## API mínima
+## QR y billeteras
 
-```text
-POST /api/payments              Crear checkout digital
-POST /api/payments/cash         Registrar efectivo
-GET  /api/payments/:reference   Consultar operación autorizada
-POST /api/payments/:id/cancel   Cancelar pendiente (ADMIN)
-POST /api/webhooks/mock
-POST /api/webhooks/taypi
-POST /api/webhooks/mercadopago
-POST /api/webhooks/culqi
-GET  /api/dashboard              Resumen y últimas operaciones
-```
-
-Respuestas no deben incluir secretos ni payloads sensibles. Errores de validación son explícitos; el webhook responde rápidamente y no ejecuta trabajo pesado dentro de la solicitud.
-
-## Realtime y experiencia
-
-La interfaz se suscribe con el cliente anon autenticado a la proyección `payment_updates`, no a `payments`: el trigger publica únicamente `id`, `reference` y `changed_at`, evitando transmitir `provider_data`. Cada evento invalida la vista y el navegador rehidrata el registro mediante `GET /api/payments/:reference` con Bearer; si la lectura falla por consistencia temporal, activa el polling de respaldo. El canal se reconecta con backoff tras `CLOSED`, `TIMED_OUT` o `CHANNEL_ERROR`, y al reconectar se repite un GET completo para recuperar eventos perdidos. Realtime solo informa al cliente; nunca autoriza una transición. La pantalla de cobro mantiene polling HTTP de respaldo y al observar `PAID` muestra monto, referencia y confirmación.
-
-Si el webhook del proveedor se retrasa, `api/cron/reconcile-payments.ts` consulta el estado server-side y aplica la misma transición atómica después de validar identidad, importe, moneda y estado. La pantalla puede solicitar la misma reconciliación para una sola referencia mediante `POST /api/payments/:reference/reconcile`. Es una red de seguridad; el webhook firmado sigue siendo el camino principal y el frontend nunca puede marcar un pago.
-
-Dashboard agrega por `amount_cents` y separa `provider=CASH` de pagos digitales. Conversión a soles ocurre únicamente en la capa de presentación/exportación.
+TAYPI devuelve el QR dinámico interoperable. Yape y Plin pueden escanearlo; Lemon es una billetera de cliente, no un proveedor de backend en esta aplicación. Un número telefónico por sí solo no produce un QR dinámico ni una confirmación verificable.
 
 ## Despliegue
 
-Vercel sirve el frontend y funciones serverless desde el mismo repositorio GitHub. Variables públicas y secretas se separan por ambiente. El mock solo se permite en desarrollo local explícito; Preview y Production bloquean rutas mock y usan proveedor real únicamente con firma/webhook probados. Webhooks deben apuntar a HTTPS. GitHub Pages no ejecuta backend ni debe contener variables secretas.
+Vercel compila la SPA y sirve las funciones. Variables `VITE_FIREBASE_*` son públicas y restringidas por dominio; `DATABASE_URL`, Firebase Admin, TAYPI y `CRON_SECRET` son secretas. Preview se usa para sandbox. Production requiere cuenta TAYPI verificada, webhook HTTPS, logs sin secretos y una operación controlada.

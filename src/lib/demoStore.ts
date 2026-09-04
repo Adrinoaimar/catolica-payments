@@ -1,5 +1,5 @@
 import type { Payment, PaymentMethod, SessionUser } from '../types'
-import { apiFetch, isDemoMode } from './supabase'
+import { apiFetch, isDemoMode } from './firebase'
 
 const STORAGE_KEY = 'catolica-payments-demo-v1'
 const SESSION_KEY = 'catolica-payments-session-v1'
@@ -113,7 +113,7 @@ export async function createPaymentRequest(amountCents: number, method: PaymentM
     if (!isDemoMode) throw new Error(body.error || `No se pudo crear el cobro (${response.status}).`)
   } catch (reason) {
     if (!isDemoMode) throw reason
-    // Demo mode can intentionally run without API/Supabase.
+    // Demo mode can intentionally run without API/Firebase.
   }
   if (!isDemoMode) throw new Error('No se pudo crear el cobro.')
   const payments = loadPayments()

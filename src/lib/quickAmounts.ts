@@ -1,4 +1,4 @@
-import { apiFetch, isDemoMode } from './supabase'
+import { apiFetch, isDemoMode } from './firebase'
 
 export interface QuickAmount {
   id?: string

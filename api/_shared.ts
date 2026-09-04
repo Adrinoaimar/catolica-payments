@@ -1,8 +1,7 @@
 import { createHash } from 'node:crypto';
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import {
   PaymentService,
-  SupabasePaymentRepository,
+  NeonPaymentRepository,
   createPaymentProvider,
   solesToCents,
   type Payment,
@@ -10,6 +9,8 @@ import {
   type ProviderPayment,
 } from '../src/server';
 import { ProviderError } from '../src/server/providers/PaymentProvider';
+import { NeonDbClient } from '../src/server/neon';
+import { firebaseAdminAuth } from '../src/server/firebaseAdmin';
 
 export interface ApiRequest {
   method?: string;
@@ -28,41 +29,44 @@ export interface ApiResponse {
 const MAX_BODY_BYTES = 256 * 1024;
 const REFERENCE_PATTERN = /^CAT-\d{8}-[A-Z2-9]{6}$/;
 
-export function serverClient(): SupabaseClient {
-  const url = process.env.SUPABASE_URL?.trim();
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
-  if (!url || !key) throw new HttpError(503, 'Supabase server environment is not configured');
-  try {
-    return createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } });
-  } catch {
-    throw new HttpError(503, 'Supabase server environment is invalid');
-  }
+export function serverClient(): NeonDbClient {
+  try { return new NeonDbClient(); }
+  catch { throw new HttpError(503, 'Neon DATABASE_URL is not configured or invalid'); }
 }
 
-export async function requireUser(request: ApiRequest, client: SupabaseClient): Promise<{ id: string; role: 'ADMIN' | 'CASHIER' }> {
+export async function requireUser(request: ApiRequest, client?: NeonDbClient | any): Promise<{ id: string; role: 'ADMIN' | 'CASHIER' }> {
   const authorization = header(request.headers, 'authorization');
   const token = authorization?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
   if (!token || token.length > 8192) throw new HttpError(401, 'Authentication required');
-  const { data, error } = await client.auth.getUser(token);
-  if (error || !data.user) throw new HttpError(401, 'Invalid session');
-  const { data: roleRow, error: roleError } = await client
-    .from('user_roles')
-    .select('role')
-    .eq('user_id', data.user.id)
-    .maybeSingle();
-  if (roleError) throw new HttpError(503, 'Could not load user role');
-  if (!roleRow || !['ADMIN', 'CASHIER'].includes(roleRow.role)) throw new HttpError(403, 'Role not configured');
-  return { id: data.user.id, role: roleRow.role as 'ADMIN' | 'CASHIER' };
+  // Keep a tiny legacy seam for unit tests and downstream adapters while all
+  // production requests are verified by Firebase Admin.
+  let userId: string;
+  if (client?.auth?.getUser) {
+    const { data, error } = await client.auth.getUser(token);
+    if (error || !data.user) throw new HttpError(401, 'Invalid session');
+    userId = data.user.id;
+    const { data: roleRow, error: roleError } = await client.from('user_roles').select('role').eq('user_id', userId).maybeSingle();
+    if (roleError) throw new HttpError(503, 'Could not load user role');
+    if (!roleRow || !['ADMIN', 'CASHIER'].includes(roleRow.role)) throw new HttpError(403, 'Role not configured');
+    return { id: userId, role: roleRow.role as 'ADMIN' | 'CASHIER' };
+  }
+  try { userId = (await firebaseAdminAuth().verifyIdToken(token)).uid; }
+  catch { throw new HttpError(401, 'Invalid Firebase session'); }
+  const db = client ?? serverClient();
+  const result = await db.from('user_roles').select('role').eq('user_id', userId).maybeSingle();
+  if (result.error) throw new HttpError(503, 'Could not load user role');
+  if (!result.data || !['ADMIN', 'CASHIER'].includes(result.data.role)) throw new HttpError(403, 'Role not configured');
+  return { id: userId, role: result.data.role as 'ADMIN' | 'CASHIER' };
 }
 
-export async function requireAdmin(request: ApiRequest, client: SupabaseClient): Promise<{ id: string; role: 'ADMIN' }> {
+export async function requireAdmin(request: ApiRequest, client?: NeonDbClient | any): Promise<{ id: string; role: 'ADMIN' }> {
   const user = await requireUser(request, client);
   if (user.role !== 'ADMIN') throw new HttpError(403, 'Only administrators can cancel payments');
   return { id: user.id, role: 'ADMIN' };
 }
 
-export function paymentRepository(client = serverClient()): SupabasePaymentRepository {
-  return new SupabasePaymentRepository(client);
+export function paymentRepository(client = serverClient()): NeonPaymentRepository {
+  return new NeonPaymentRepository(client);
 }
 
 export function paymentContext(client = serverClient()): { service: PaymentService; provider: PaymentProvider } {
@@ -76,7 +80,7 @@ export function paymentContext(client = serverClient()): { service: PaymentServi
 /** Consume a durable PostgreSQL bucket; in-memory counters are not safe on
  * ephemeral serverless instances. */
 export async function consumeRateLimit(
-  client: SupabaseClient,
+  client: NeonDbClient | any,
   bucketKey: string,
   limit: number,
   windowSeconds = 60,
@@ -251,7 +255,7 @@ export type WebhookReceiptOutcome = 'ACCEPTED' | 'DUPLICATE' | 'REJECTED' | 'ERR
  * path; payment_events remains the authoritative audit trail.
  */
 export async function recordWebhookReceipt(
-  client: SupabaseClient,
+  client: NeonDbClient | any,
   input: {
     provider: string;
     providerEventId: string;

@@ -4,10 +4,15 @@ const errors = []
 const env = process.env
 
 const required = [
-  'VITE_SUPABASE_URL',
-  'VITE_SUPABASE_ANON_KEY',
-  'SUPABASE_URL',
-  'SUPABASE_SERVICE_ROLE_KEY',
+  'VITE_FIREBASE_API_KEY',
+  'VITE_FIREBASE_AUTH_DOMAIN',
+  'VITE_FIREBASE_PROJECT_ID',
+  'VITE_FIREBASE_MESSAGING_SENDER_ID',
+  'VITE_FIREBASE_APP_ID',
+  'DATABASE_URL',
+  'FIREBASE_PROJECT_ID',
+  'FIREBASE_CLIENT_EMAIL',
+  'FIREBASE_PRIVATE_KEY',
   'CRON_SECRET',
   'TAYPI_PUBLIC_KEY',
   'TAYPI_SECRET_KEY',
@@ -44,7 +49,7 @@ if (String(env.CRON_SECRET ?? '').trim().length < 32) {
   errors.push('CRON_SECRET must contain at least 32 characters')
 }
 
-for (const name of ['VITE_SUPABASE_URL', 'SUPABASE_URL', 'TAYPI_API_URL']) {
+for (const name of ['TAYPI_API_URL']) {
   const value = String(env[name] ?? '').trim()
   if (!value) continue
   try {

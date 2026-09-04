@@ -11,7 +11,7 @@ import { listPayments, loadPayments, savePayments, simulateMockPayment } from '.
 import { formatSoles } from './lib/format'
 import type { Payment, SessionUser } from './types'
 import { AuthProvider, useAuth } from './lib/auth'
-import { isDemoMode } from './lib/supabase'
+import { isDemoMode } from './lib/firebase'
 import { fetchPublicPayment, subscribeToPayments } from './lib/realtime'
 import { mergePayment, mergePaymentSnapshot } from './lib/paymentMerge'
 import './styles.css'

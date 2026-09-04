@@ -1,4 +1,4 @@
-import { apiFetch } from './supabase'
+import { apiFetch } from './firebase'
 import type { QuickAmount } from './quickAmounts'
 
 export type ManagedRole = 'ADMIN' | 'CASHIER'

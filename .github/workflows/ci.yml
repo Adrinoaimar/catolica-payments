@@ -34,10 +34,15 @@ jobs:
 
       - name: Verify production environment shape
         env:
-          VITE_SUPABASE_URL: https://ci-placeholder.supabase.co
-          VITE_SUPABASE_ANON_KEY: ci-anon-placeholder
-          SUPABASE_URL: https://ci-placeholder.supabase.co
-          SUPABASE_SERVICE_ROLE_KEY: ci-service-role-placeholder
+          VITE_FIREBASE_API_KEY: ci-firebase-api-key
+          VITE_FIREBASE_AUTH_DOMAIN: ci.firebaseapp.com
+          VITE_FIREBASE_PROJECT_ID: ci-firebase
+          VITE_FIREBASE_MESSAGING_SENDER_ID: ci-sender
+          VITE_FIREBASE_APP_ID: ci-app
+          DATABASE_URL: postgres://ci:ci@example.com/ci
+          FIREBASE_PROJECT_ID: ci-firebase
+          FIREBASE_CLIENT_EMAIL: ci@example.com
+          FIREBASE_PRIVATE_KEY: ci-private-key
           CRON_SECRET: ci-cron-secret-placeholder-32-characters-long
           PAYMENT_PROVIDER: taypi
           TAYPI_PUBLIC_KEY: taypi_pk_live_ci_placeholder

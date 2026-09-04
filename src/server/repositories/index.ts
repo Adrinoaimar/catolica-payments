@@ -1,3 +1,3 @@
 export * from './PaymentRepository';
 export * from './InMemoryPaymentRepository';
-export * from './SupabasePaymentRepository';
+export * from './NeonPaymentRepository';

@@ -14,7 +14,9 @@
     "verify:production": "node scripts/verify-production-env.mjs"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.57.4",
+    "@neondatabase/serverless": "^1.1.0",
+    "firebase": "^12.18.0",
+    "firebase-admin": "^13.10.0",
     "lucide-react": "^0.468.0",
     "qrcode.react": "^4.2.0",
     "react": "^19.1.1",

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { handleWebhook, MockPaymentProvider, PaymentService, SupabasePaymentRepository } from '../../../src/server';
+import { handleWebhook, MockPaymentProvider, NeonPaymentRepository, PaymentService } from '../../../src/server';
 import { serverClient, type ApiRequest, type ApiResponse } from '../../_shared';
 
 /** Development-only simulator. It routes through identical webhook validation/transition code. */
@@ -13,7 +13,7 @@ export default async function handler(request: ApiRequest & { query?: Record<str
     if (error) throw error;
     if (!payment || payment.provider !== 'mock' || !payment.provider_payment_id) { response.status(404).json({ error: 'Payment not found' }); return; }
     const provider = new MockPaymentProvider({ allowUnknownWebhook: true });
-    const service = new PaymentService({ provider, repository: new SupabasePaymentRepository(client) });
+    const service = new PaymentService({ provider, repository: new NeonPaymentRepository(client) });
     const rawBody = JSON.stringify({
       event_id: `mock_evt_${randomUUID()}`, event_type: 'payment.paid', status: 'PAID',
       provider_payment_id: payment.provider_payment_id, reference: payment.reference,

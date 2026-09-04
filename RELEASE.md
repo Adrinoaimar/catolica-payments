@@ -1,50 +1,41 @@
 # Guía de activación real
 
-Esta guía separa el software verificable de las credenciales y cuentas que solo puede administrar el propietario de la institución.
+La aplicación está preparada para Neon + Firebase + TAYPI, pero las cuentas y credenciales deben ser del propietario de la institución.
 
-## Variables por ambiente
+## Variables
 
-En Vercel Production configure `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `PAYMENT_PROVIDER=taypi`, `TAYPI_PUBLIC_KEY`, `TAYPI_SECRET_KEY`, `TAYPI_WEBHOOK_SECRET` y `CRON_SECRET`. Mantenga las claves privadas sin prefijo `VITE_`. Use `TAYPI_SANDBOX=true` y claves de prueba únicamente en un entorno de staging; el verificador las rechaza en producción.
+En Vercel configure las variables de [.env.example](.env.example). En Preview use `PAYMENT_PROVIDER=taypi` con claves `*_test_*`; en Production use `*_live_*` solo tras completar la verificación comercial. Mantenga `DATABASE_URL`, Firebase Admin, `CRON_SECRET` y secretos de webhook sin prefijo `VITE_`.
 
-Configure además un límite de solicitudes por IP/usuario en Vercel WAF o en el
-gateway que publique el dominio, al menos para `POST /api/payments*`,
-`POST /api/payments/:reference/reconcile` y `/api/webhooks/*`. El repositorio
-no usa contadores en memoria como sustituto de un límite distribuido.
+Ejecute con las variables cargadas:
 
-Antes de desplegar, ejecute `npm run verify:production` con las variables cargadas. El comando solo valida presencia, forma, HTTPS y separación de secretos; nunca imprime sus valores. CI también ejecuta esta verificación con valores sintéticos para detectar regresiones, pero no sustituye validarla contra las variables reales del proyecto.
+```bash
+npm run verify:production
+```
 
-## Migraciones y Realtime
+El verificador comprueba presencia, forma, HTTPS y separación de secretos sin imprimir valores.
 
-Ejecute en orden todas las migraciones de `supabase/migrations/`, incluidas `20260902000002_realtime_payment_updates.sql`, `20260902000003_admin_cancellation.sql`, `20260902000004_admin_settings.sql`, `20260902000005_webhook_receipts_and_job_lock.sql`, `20260902000006_create_idempotency.sql`, `20260902000007_lock_admin_role_changes.sql`, `20260903000008_harden_webhook_identity.sql`, `20260903000009_recoverable_payment_intents.sql`, `20260903000010_realtime_delete_identity.sql`, `20260903000011_api_rate_limits.sql`, `20260903000012_provider_capture_race.sql` y `20260903000013_realtime_cashier_scope.sql`. Después cree al menos un usuario Auth y su fila `user_roles` con `ADMIN` o `CASHIER`. Verifique que el canal `payment_updates` se suscribe con sesión autenticada y que `provider_data` nunca aparece en el payload público.
+## Neon y Firebase
 
-## Smoke test antes de dinero real
+Ejecute [database/migrations/0001_initial.sql](database/migrations/0001_initial.sql) en Neon. Cree el primer usuario con Email/Password en Firebase y copie su UID a `user_roles` con rol `ADMIN`. Configure los dominios autorizados de Firebase para localhost y el dominio de Vercel.
 
-Para una prueba local que incluya las funciones serverless no basta con
-`npm run dev`: Vite solo sirve la interfaz. Ejecute `npx vercel@latest dev`
-desde el repositorio con `.env.local` configurado, o use el deployment de
-Preview. Compruebe que `GET /api/payments` devuelve JSON (con un Bearer válido)
-y que `POST /api/webhooks/taypi` llega al handler, no al fallback HTML de la
-SPA.
+## Smoke test
 
-1. Iniciar sesión como cajero y crear un cobro pequeño.
-2. Confirmar que aparece QR/checkout de Taypi y estado `PENDING`.
-3. Completar el pago sandbox y comprobar que el webhook cambia a `PAID` una sola vez.
-4. Reenviar el mismo webhook y comprobar que no duplica `payment_events`.
-5. Bloquear temporalmente el webhook, ejecutar el cron con `Authorization: Bearer $CRON_SECRET` y comprobar reconciliación.
-6. Confirmar actualización en otra sesión autenticada y revisar dashboard/operaciones.
-7. Probar expiración, `FAILED` y `CANCELLED`; ninguna debe mostrarse como pagada.
-8. Verificar que un exceso controlado de solicitudes devuelve `429` y `Retry-After`, sin crear pagos ni eventos adicionales.
+1. Inicie sesión como `CASHIER` y cree un cobro sandbox.
+2. Confirme que el QR/checkout aparece como `PENDING`.
+3. Complete el pago de prueba y compruebe que el webhook firmado lo cambia una sola vez a `PAID`.
+4. Reenvíe el webhook y verifique que no duplica `payment_events`.
+5. Ejecute el cron con `Authorization: Bearer <CRON_SECRET>` y compruebe conciliación.
+6. Pruebe expiración, `FAILED`, efectivo y cancelación administrativa.
+7. Revise dashboard, permisos y respuestas `429` de rate limit.
 
-## Rollback seguro
+Para funciones locales use `npx vercel@latest dev`; `npm run dev` sirve únicamente la SPA.
 
-Si el smoke test falla, desactive el despliegue o vuelva a un entorno local de desarrollo para usar `PAYMENT_PROVIDER=mock`; los entornos Vercel no deben usar el simulador. No marque operaciones manualmente. Revierta el alias de Vercel al último deployment conocido y conserve la base de datos y `payment_events`. Las migraciones son aditivas; no ejecute `DROP TABLE` ni borre el ledger como rollback. Investigue primero logs sin imprimir secretos o payloads crudos.
+## Scheduler y rollback
 
-## Scheduler
+El cron configurado en `vercel.json` intenta ejecutarse cada cinco minutos. Vercel Hobby puede limitar esta frecuencia; use un scheduler HTTPS externo que envíe `CRON_SECRET` hasta disponer de un plan/host que garantice el intervalo. El lock en Neon impide ejecuciones solapadas.
 
-El cron de `vercel.json` usa cada cinco minutos. La ruta declara `maxDuration=300` y limita cada pasada a 12 pendientes con cuatro solicitudes simultáneas. Si el plan Vercel limita esa frecuencia o duración, invoque `/api/cron/reconcile-payments` desde Supabase Cron/`pg_cron` o un scheduler externo con el mismo secreto. El endpoint devuelve `503` si alguna operación no pudo reconciliarse, para que el scheduler/monitorización lo detecte. También recupera intenciones `PENDING` que aún no tienen `provider_payment_id`, usando la misma referencia/idempotencia del proveedor. El webhook firmado sigue siendo la autoridad y el cron solo reconcilia estados consultados server-side.
+Ante un fallo, desactive el alias o vuelva al deployment anterior sin borrar tablas ni `payment_events`. Las migraciones son aditivas. Nunca marque operaciones manualmente ni active el mock en Preview/Production.
 
-La migración `20260902000005_webhook_receipts_and_job_lock.sql` registra únicamente proveedor, identificador de entrega, hash SHA-256, resultado y código de error; no duplica el payload crudo. También crea un lease de Postgres para evitar cron solapado. Si el lock no está aplicado, el endpoint devuelve `503` y no consulta al proveedor.
+## Criterio para dinero real
 
-## PWA
-
-La build productiva debe publicar `manifest.webmanifest`, `/icons/icon.svg` y `/sw.js` en la raíz del dominio. Compruebe en DevTools que el worker esté activo y que una navegación sin conexión solo recupere la interfaz, nunca respuestas de `/api/`, webhooks o datos de Supabase. El worker no sustituye la autenticación ni habilita cobros offline: antes de aprobar una operación, el cajero debe tener conectividad con el API y el ledger. Al cambiar la estrategia o los assets no versionados, incremente las versiones de caché en `public/sw.js` y repita el smoke test.
+No basta con que la UI compile. Antes de cobrar a una persona real deben estar completos: cuenta TAYPI verificada, claves live, webhook HTTPS, `DATABASE_URL` de producción, usuario administrador, backup/exportación de Neon, prueba de conciliación y una operación controlada de importe pequeño. TAYPI puede aplicar comisiones aun cuando la infraestructura gratuita permanezca dentro de sus cuotas.

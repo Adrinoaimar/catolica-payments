@@ -1,5 +1,5 @@
-import { PaymentService, SupabasePaymentRepository, type Payment } from '../../src/server';
-import type { SupabaseClient } from '@supabase/supabase-js';
+import { PaymentService, NeonPaymentRepository, type Payment } from '../../src/server';
+import type { NeonDbClient } from '../../src/server/neon';
 import { MockPaymentProvider } from '../../src/server/providers/MockPaymentProvider';
 import { ProviderError } from '../../src/server/providers/PaymentProvider';
 import {
@@ -22,7 +22,7 @@ const REAL_PROVIDERS = new Set(['taypi', 'culqi', 'mercadopago']);
 export default async function handler(request: ApiRequest & Partial<AsyncIterable<Uint8Array>>, response: ApiResponse): Promise<void> {
   if (request.method !== 'POST') { response.status(405).json({ ok: false, error: 'Method not allowed' }); return; }
   let rawBody = '';
-  let client: SupabaseClient | undefined;
+  let client: NeonDbClient | undefined;
   let receiptEventId = '';
   const providerName = singleQuery(request.query?.provider)?.toLowerCase() ?? '';
   try {
@@ -78,7 +78,7 @@ function paymentContextForWebhook(name: string) {
     if (isHostedDeployment()) throw new HttpError(404, 'Not found');
     const client = serverClient();
     const provider = new MockPaymentProvider({ allowUnknownWebhook: true });
-    const service = new PaymentService({ provider, repository: new SupabasePaymentRepository(client) });
+    const service = new PaymentService({ provider, repository: new NeonPaymentRepository(client) });
     return { provider, service, client };
   }
   if (!REAL_PROVIDERS.has(name)) throw new HttpError(404, 'Webhook provider is not active');

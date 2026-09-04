@@ -7,8 +7,7 @@ import {
   type ApiResponse,
 } from '../../_shared';
 import { managedUser, parseRole, setUserRole, type ManagedRole } from '../users';
-
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+import { firebaseAdminAuth } from '../../../src/server/firebaseAdmin';
 
 export default async function handler(request: ApiRequest, response: ApiResponse): Promise<void> {
   if (request.method !== 'PATCH') {
@@ -21,10 +20,10 @@ export default async function handler(request: ApiRequest, response: ApiResponse
     const userId = parseUserId(request.query?.id ?? request.query?.userId);
     const body = parseBody(request.body);
     const role = parseRole(body.role);
-    const { data, error } = await client.auth.admin.getUserById(userId);
-    if (error || !data.user) throw new HttpError(404, 'Usuario no encontrado');
+    const user = await firebaseAdminAuth().getUser(userId).catch(() => null);
+    if (!user) throw new HttpError(404, 'Usuario no encontrado');
     await setUserRole(client, userId, role, admin.id);
-    response.status(200).json({ user: await managedUser(client, data.user) });
+    response.status(200).json({ user: await managedUser(client, user) });
   } catch (error) {
     sendAdminError(response, error);
   }
@@ -32,7 +31,7 @@ export default async function handler(request: ApiRequest, response: ApiResponse
 
 function parseUserId(value: unknown): string {
   const id = Array.isArray(value) ? value[0] : value;
-  if (typeof id !== 'string' || !UUID_PATTERN.test(id)) throw new HttpError(400, 'Invalid user id');
+  if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{8,128}$/.test(id)) throw new HttpError(400, 'Invalid user id');
   return id;
 }
 

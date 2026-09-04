@@ -2,7 +2,7 @@
  * Católica Pay shell service worker.
  *
  * This deliberately has a narrow cache allow-list. Payment/API requests,
- * webhook endpoints, Supabase calls and development routes never enter a
+ * webhook endpoints, Firebase calls and development routes never enter a
  * cache, so an offline/stale browser cannot present old financial data.
  */
 const CACHE_PREFIX = 'catolica-payments-'

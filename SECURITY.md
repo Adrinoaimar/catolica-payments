@@ -16,7 +16,7 @@ Navegador del cajero/cliente (no confiable)
     | sesión + validación de entrada
 API serverless (límite de autorización)
     | service role + transacción + auditoría
-Supabase PostgreSQL (fuente de verdad)
+Neon PostgreSQL (fuente de verdad)
     ^
 Proveedor de pagos (webhook no confiable hasta verificar firma)
 ```
@@ -25,11 +25,11 @@ El navegador puede ser manipulado. Realtime, QR, contador y pantalla de éxito s
 
 ## Autenticación y autorización
 
-- Usar Supabase Auth con sesión vigente y expiración razonable.
+- Usar Firebase Authentication con ID token vigente y expiración razonable.
 - Aplicar RBAC en cada endpoint, no solo ocultar controles en UI.
 - `CASHIER` puede crear y consultar operaciones permitidas; no editar pagos terminales, auditoría ni configuración global.
-- `ADMIN` recibe acciones adicionales según políticas RLS.
-- Denegar por defecto y probar RLS con usuario anon, `CASHIER` y `ADMIN`.
+- `ADMIN` recibe acciones adicionales según comprobaciones server-side y funciones SQL.
+- Denegar por defecto y probar cada endpoint con usuario sin rol, `CASHIER` y `ADMIN`.
 - No registrar tokens de sesión ni service-role keys.
 
 ## Webhooks
@@ -48,7 +48,7 @@ No confiar en un campo de éxito sin verificarlo contra el proveedor cuando el c
 
 ## Datos y secretos
 
-- `SUPABASE_ANON_KEY` puede llegar al cliente; `SUPABASE_SERVICE_ROLE_KEY` nunca.
+- `VITE_FIREBASE_*` identifica la aplicación web y debe restringirse por dominio; las credenciales de Firebase Admin nunca llegan al cliente.
 - Claves Taypi/Culqi/Mercado Pago y secretos webhook solo en variables de entorno serverless.
 - No usar prefijo `VITE_` para valores secretos.
 - Redactar `raw_payload` y logs; conservar solo lo necesario para auditoría.

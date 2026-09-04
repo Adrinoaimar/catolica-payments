@@ -11,7 +11,8 @@ import {
 } from '../_shared';
 
 // Vercel Pro/Enterprise can run this bounded reconciliation pass for up to
-// five minutes. Hobby deployments should use the Supabase Cron template.
+// five minutes. Hobby deployments should use an external scheduler if the
+// host cannot schedule this frequency.
 export const config = { maxDuration: 300 };
 
 /** Vercel invokes cron handlers with GET and Authorization: Bearer CRON_SECRET. */
@@ -61,7 +62,7 @@ export default async function handler(request: ApiRequest, response: ApiResponse
 }
 
 /**
- * Keep this check independent from Supabase auth: Vercel cron has no user
+ * Keep this check independent from Firebase auth: Vercel cron has no user
  * session, and the secret is the only credential allowed for this job.
  */
 export function assertCronSecret(request: ApiRequest): void {

@@ -1,12 +1,25 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
-import type { Session, User } from '@supabase/supabase-js'
+import {
+  onAuthStateChanged,
+  sendPasswordResetEmail,
+  signInWithEmailAndPassword,
+  signOut as firebaseSignOut,
+  type User,
+} from 'firebase/auth'
 import { clearSession, loadSession, saveSession } from './demoStore'
-import { authUserToSessionUser, initialsFor, isDemoMode, isSupabaseConfigured, supabase } from './supabase'
+import {
+  authUserToSessionUser,
+  firebaseAuth,
+  initialsFor,
+  isDemoMode,
+  isFirebaseConfigured,
+  apiFetch,
+} from './firebase'
 import type { SessionUser } from '../types'
 
 interface AuthContextValue {
   user: SessionUser | null
-  session: Session | null
+  session: User | null
   loading: boolean
   error: string | null
   demoMode: boolean
@@ -18,7 +31,7 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | undefined>(undefined)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [session, setSession] = useState<Session | null>(null)
+  const [session, setSession] = useState<User | null>(null)
   const [user, setUser] = useState<SessionUser | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -35,28 +48,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return () => { active = false }
     }
 
-    if (!supabase) {
+    if (!firebaseAuth || !isFirebaseConfigured) {
       if (active) {
-        setError('Supabase Auth no está configurado. Define las variables VITE_SUPABASE_* antes de iniciar sesión.')
+        setError('Firebase Auth no está configurado. Define las variables VITE_FIREBASE_* antes de iniciar sesión.')
         setLoading(false)
       }
       return () => { active = false }
     }
 
-    const hydrate = async (nextSession: Session | null) => {
-      if (!nextSession) {
-        if (active) { setSession(null); setUser(null); setLoading(false) }
+    const hydrate = async (nextUser: User | null) => {
+      if (!nextUser) {
+        if (active) {
+          setSession(null)
+          setUser(null)
+          setError(null)
+          setLoading(false)
+        }
         return
       }
       try {
-        const nextUser = await resolveSessionUser(nextSession.user)
+        const nextSessionUser = await resolveSessionUser(nextUser)
         if (!active) return
-        setSession(nextSession)
-        setUser(nextUser)
+        setSession(nextUser)
+        setUser(nextSessionUser)
         setError(null)
       } catch (reason) {
         if (!active) return
-        setSession(nextSession)
+        setSession(nextUser)
         setUser(null)
         setError(toAuthMessage(reason))
       } finally {
@@ -64,24 +82,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     }
 
-    void supabase.auth.getSession().then(({ data, error: sessionError }) => {
-      if (sessionError) throw sessionError
-      return hydrate(data.session)
-    }).catch((reason) => {
-      if (active) {
-        setError(toAuthMessage(reason))
-        setLoading(false)
-      }
-    })
-
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      // Do not await inside Supabase callback. Hydration can query user_roles.
-      window.setTimeout(() => { void hydrate(nextSession) }, 0)
+    const unsubscribe = onAuthStateChanged(firebaseAuth, (nextUser) => {
+      void hydrate(nextUser)
     })
 
     return () => {
       active = false
-      listener.subscription.unsubscribe()
+      unsubscribe()
     }
   }, [])
 
@@ -102,23 +109,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setError(null)
         return demoUser
       }
-      if (!supabase) throw new Error('Supabase Auth no está configurado.')
+      if (!firebaseAuth || !isFirebaseConfigured) throw new Error('Firebase Auth no está configurado.')
 
-      const { data, error: signInError } = await supabase.auth.signInWithPassword({ email: normalizedEmail, password })
-      if (signInError) throw new Error(toAuthMessage(signInError))
-      if (!data.session) throw new Error('No se recibió una sesión válida.')
-
-      const nextUser = await resolveSessionUser(data.session.user)
-      setSession(data.session)
-      setUser(nextUser)
-      setError(null)
-      return nextUser
+      try {
+        const credential = await signInWithEmailAndPassword(firebaseAuth, normalizedEmail, password)
+        const nextUser = await resolveSessionUser(credential.user)
+        setSession(credential.user)
+        setUser(nextUser)
+        setError(null)
+        return nextUser
+      } catch (reason) {
+        throw new Error(toAuthMessage(reason))
+      }
     },
     signOut: async () => {
-      if (supabase && !isDemoMode) {
-        const { error: signOutError } = await supabase.auth.signOut()
-        if (signOutError) throw new Error(toAuthMessage(signOutError))
-      }
+      if (firebaseAuth && !isDemoMode) await firebaseSignOut(firebaseAuth)
       clearSession()
       setSession(null)
       setUser(null)
@@ -128,11 +133,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const normalizedEmail = email.trim().toLowerCase()
       if (!normalizedEmail) throw new Error('Ingresa tu correo electrónico.')
       if (isDemoMode) return
-      if (!supabase) throw new Error('Supabase Auth no está configurado.')
-      const { error: resetError } = await supabase.auth.resetPasswordForEmail(normalizedEmail, {
-        redirectTo: `${window.location.origin}/reset-password`,
-      })
-      if (resetError) throw new Error(toAuthMessage(resetError))
+      if (!firebaseAuth || !isFirebaseConfigured) throw new Error('Firebase Auth no está configurado.')
+      try {
+        await sendPasswordResetEmail(firebaseAuth, normalizedEmail, {
+          url: `${window.location.origin}/reset-password`,
+          handleCodeInApp: false,
+        })
+      } catch (reason) {
+        throw new Error(toAuthMessage(reason))
+      }
     },
   }), [error, loading, session, user])
 
@@ -145,18 +154,21 @@ export function useAuth(): AuthContextValue {
   return value
 }
 
+/**
+ * UI role comes from a Firebase custom claim when present. The API must still
+ * resolve the authoritative role from Neon for every protected request.
+ */
 async function resolveSessionUser(authUser: User): Promise<SessionUser> {
-  if (!supabase) throw new Error('Supabase Auth no está configurado.')
-  const { data: roleRow, error: roleError } = await supabase
-    .from('user_roles')
-    .select('role')
-    .eq('user_id', authUser.id)
-    .maybeSingle()
-  if (roleError) throw new Error(`No se pudo cargar tu rol: ${roleError.message}`)
-  if (!roleRow || !['ADMIN', 'CASHIER'].includes(String(roleRow.role))) {
-    throw new Error('Tu usuario todavía no tiene un rol asignado. Solicita acceso al administrador.')
+  let role: SessionUser['role'] = 'CASHIER'
+  try {
+    const response = await apiFetch('/api/auth/me')
+    const body = await response.json().catch(() => ({})) as { user?: { role?: unknown } }
+    if (response.ok && body.user?.role === 'ADMIN') role = 'ADMIN'
+  } catch {
+    // The API remains authoritative; the fallback keeps the shell usable while
+    // the first request is retried or during a local preview without functions.
   }
-  return authUserToSessionUser(authUser, roleRow.role as SessionUser['role'])
+  return authUserToSessionUser(authUser, role)
 }
 
 function makeDemoUser(email: string): SessionUser {
@@ -166,9 +178,19 @@ function makeDemoUser(email: string): SessionUser {
 }
 
 function toAuthMessage(reason: unknown): string {
-  if (reason instanceof Error && reason.message) return reason.message
-  if (typeof reason === 'object' && reason && 'message' in reason && typeof reason.message === 'string') return reason.message
+  if (reason instanceof Error && reason.message) return translateFirebaseError(reason.message)
+  if (typeof reason === 'object' && reason && 'message' in reason && typeof reason.message === 'string') {
+    return translateFirebaseError(reason.message)
+  }
   return 'No se pudo validar tu sesión. Intenta nuevamente.'
 }
 
-export { isSupabaseConfigured }
+function translateFirebaseError(message: string): string {
+  if (/auth\/invalid-credential|auth\/wrong-password|auth\/user-not-found/i.test(message)) return 'Correo o contraseña incorrectos.'
+  if (/auth\/too-many-requests/i.test(message)) return 'Demasiados intentos. Espera unos minutos y vuelve a intentar.'
+  if (/auth\/invalid-email/i.test(message)) return 'El correo electrónico no es válido.'
+  if (/auth\/network-request-failed/i.test(message)) return 'No se pudo conectar con Firebase Auth.'
+  return message
+}
+
+export { isFirebaseConfigured }

@@ -1,15 +1,7 @@
-import type { RealtimeChannel } from '@supabase/supabase-js'
 import type { Payment } from '../types'
-import { apiFetch, isDemoMode, supabase } from './supabase'
+import { apiFetch, isDemoMode } from './firebase'
 
-/**
- * Identifiers emitted by the payments Realtime stream.
- *
- * The browser deliberately does not use the row payload as a payment object.
- * A change only invalidates the local snapshot; App refreshes the affected
- * record through the authenticated API, which applies the public response
- * boundary and never exposes provider metadata to UI state.
- */
+/** Polling-compatible change events. Kept stable so App does not depend on a realtime vendor. */
 export type PaymentChangeEvent = 'INSERT' | 'UPDATE' | 'DELETE'
 
 export interface PaymentChange {
@@ -22,99 +14,66 @@ export interface SubscribeToPaymentsOptions {
   userId: string
   onChange: (change: PaymentChange) => void
   onStatus?: (status: 'SUBSCRIBED' | 'CHANNEL_ERROR' | 'TIMED_OUT' | 'CLOSED', error?: Error) => void
-}
-
-type RealtimeRow = Record<string, unknown>
-type RealtimePayload = {
-  eventType?: string
-  new?: RealtimeRow
-  old?: RealtimeRow
+  /** Polling cadence. Defaults to five seconds for pending payment UX. */
+  intervalMs?: number
 }
 
 /**
- * Subscribe to authenticated payment changes.
+ * Poll the authenticated ledger and emit only changes between snapshots.
  *
- * Supabase applies `payment_updates` RLS to this channel. That projection
- * contains only payment ID/reference, so provider secrets never cross the
- * Realtime stream. No service-role key or provider credentials are read by
- * this module. Demo mode has no channel; its local event/storage path remains
- * isolated from production.
+ * This replaces provider-specific WebSocket realtime. The API response is
+ * already sanitized; each change is still re-read through the public payment
+ * endpoint before UI state uses it. Backend/webhook remains payment authority.
  */
-export function subscribeToPayments({ userId, onChange, onStatus }: SubscribeToPaymentsOptions): () => void {
-  if (isDemoMode || !supabase || !userId) return () => undefined
+export function subscribeToPayments({ userId, onChange, onStatus, intervalMs = 5_000 }: SubscribeToPaymentsOptions): () => void {
+  if (isDemoMode || !userId) return () => undefined
 
-  const channelName = `payments:${userId}`
   let disposed = false
-  let channel: RealtimeChannel | null = null
-  let reconnectTimer: number | null = null
-  let reconnectAttempt = 0
+  let polling = false
+  let initialized = false
+  let previous = new Map<string, Payment>()
 
-  const scheduleReconnect = () => {
-    if (disposed || reconnectTimer !== null) return
-    const delay = Math.min(30_000, 1_000 * (2 ** Math.min(reconnectAttempt, 5)))
-    reconnectAttempt += 1
-    reconnectTimer = window.setTimeout(() => {
-      reconnectTimer = null
+  const poll = async () => {
+    if (disposed || polling) return
+    polling = true
+    try {
+      const next = await fetchPaymentsSnapshot()
       if (disposed) return
-      if (channel) {
-        const previous = channel
-        channel = null
-        void supabase?.removeChannel(previous)
-      }
-      connect()
-    }, delay)
-  }
-
-  function connect() {
-    if (disposed || !supabase) return
-    const nextChannel = supabase.channel(channelName)
-    // Assign before subscribe: some adapters can synchronously report an
-    // initial state, and that state must not be discarded as stale.
-    channel = nextChannel
-    nextChannel.on('postgres_changes', { event: '*', schema: 'public', table: 'payment_updates' }, (payload: RealtimePayload) => {
-        const event = normalizeEvent(payload.eventType)
-        if (!event || disposed || channel !== nextChannel) return
-        const row = event === 'DELETE' ? payload.old : payload.new
-        if (!row || typeof row !== 'object') return
-        const id = stringValue(row.id)
-        const reference = stringValue(row.reference)
-        // Do not forward row data. provider_data can contain provider-only
-        // response fields; App re-reads a sanitized public payment by reference.
-        // DELETE only needs the primary key, so it remains actionable even if
-        // a deployment uses the default replica identity.
-        if (event === 'DELETE' && !id) return
-        onChange({ event, id, reference })
-      })
-      .subscribe((status, reason) => {
-        if (disposed || channel !== nextChannel) return
-        if (status === 'SUBSCRIBED') {
-          reconnectAttempt = 0
-          onStatus?.(status)
-        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-          const error = reason instanceof Error ? reason : reason ? new Error(String(reason)) : undefined
-          onStatus?.(status, error)
-          scheduleReconnect()
+      const current = new Map(next.map((payment) => [payment.id, payment]))
+      if (initialized) {
+        for (const payment of next) {
+          const old = previous.get(payment.id)
+          if (!old) {
+            onChange({ event: 'INSERT', id: payment.id, reference: payment.reference })
+          } else if (old.status !== payment.status || old.paidAt !== payment.paidAt || old.expiresAt !== payment.expiresAt) {
+            onChange({ event: 'UPDATE', id: payment.id, reference: payment.reference })
+          }
         }
-      })
+        for (const payment of previous.values()) {
+          if (!current.has(payment.id)) onChange({ event: 'DELETE', id: payment.id, reference: payment.reference })
+        }
+      }
+      previous = current
+      initialized = true
+      onStatus?.('SUBSCRIBED')
+    } catch (reason) {
+      if (!disposed) onStatus?.('CHANNEL_ERROR', toError(reason, 'No se pudo sincronizar el ledger.'))
+    } finally {
+      polling = false
+    }
   }
 
-  connect()
+  void poll()
+  const timer = window.setInterval(() => { void poll() }, Math.max(2_000, intervalMs))
 
   return () => {
     disposed = true
-    if (reconnectTimer !== null) window.clearTimeout(reconnectTimer)
-    reconnectTimer = null
-    // removeChannel also calls unsubscribe and clears the Realtime binding.
-    if (channel) void supabase?.removeChannel(channel)
-    channel = null
+    window.clearInterval(timer)
+    onStatus?.('CLOSED')
   }
 }
 
-/**
- * Re-read one changed payment through the authenticated API. Realtime rows
- * are intentionally not trusted as UI data because they include internal DB
- * columns that the public API strips (for example provider_data).
- */
+/** Re-read one changed payment through the authenticated API. */
 export async function fetchPublicPayment(reference: string): Promise<Payment> {
   if (!reference) throw new Error('Missing payment reference')
   const response = await apiFetch(`/api/payments/${encodeURIComponent(reference)}`)
@@ -126,13 +85,12 @@ export async function fetchPublicPayment(reference: string): Promise<Payment> {
   return normalizePublicPayment(body)
 }
 
-function normalizeEvent(value: unknown): PaymentChangeEvent | null {
-  if (value === 'INSERT' || value === 'UPDATE' || value === 'DELETE') return value
-  return null
-}
-
-function stringValue(value: unknown): string | null {
-  return typeof value === 'string' && value.trim() ? value.trim() : null
+async function fetchPaymentsSnapshot(): Promise<Payment[]> {
+  const response = await apiFetch('/api/payments?limit=200&offset=0')
+  const body = await response.json().catch(() => ({})) as { payments?: unknown; error?: unknown }
+  if (!response.ok) throw new Error(typeof body.error === 'string' ? body.error : `No se pudieron cargar las operaciones (${response.status}).`)
+  if (!Array.isArray(body.payments)) throw new Error('El servidor devolvió un listado inválido.')
+  return body.payments.map(normalizePublicPayment)
 }
 
 function normalizePublicPayment(value: unknown): Payment {
@@ -167,4 +125,8 @@ function normalizePublicPayment(value: unknown): Payment {
     checkoutUrl: typeof raw.checkoutUrl === 'string' ? raw.checkoutUrl : undefined,
     checkoutToken: typeof raw.checkoutToken === 'string' ? raw.checkoutToken : undefined,
   }
+}
+
+function toError(reason: unknown, fallback: string): Error {
+  return reason instanceof Error && reason.message ? reason : new Error(fallback)
 }

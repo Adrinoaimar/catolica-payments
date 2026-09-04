@@ -3,7 +3,7 @@ import { ArrowIcon, CheckIcon, ClockIcon, CloseIcon, CopyIcon, InfoIcon, QrIcon 
 import { QrCode } from '../components/QrCode'
 import { formatSoles } from '../lib/format'
 import { simulateMockPayment } from '../lib/demoStore'
-import { apiFetch } from '../lib/supabase'
+import { apiFetch } from '../lib/firebase'
 import { fetchPublicPayment } from '../lib/realtime'
 import type { Payment } from '../types'
 
