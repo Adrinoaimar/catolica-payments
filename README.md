@@ -141,6 +141,12 @@ Configure en el panel de TAYPI el webhook `https://<dominio-produccion>/api/webh
 
 Antes de procesar dinero real, complete la verificación KYB de la cuenta de TAYPI, registre el webhook HTTPS de producción y ejecute un pago real de extremo a extremo. Las claves de sandbox no procesan dinero real ni funcionan en `app.taypi.pe`.
 
+### Yape y Lemon
+
+El QR interoperable de TAYPI se paga desde Yape, Plin y otras billeteras compatibles con la CCE. Lemon funciona como billetera del cliente: puede escanear un QR de Yape/Plin interoperable, pero no se configura aquí como un segundo proveedor de cobro ni como fuente de webhooks. Por eso el selector de la caja muestra un único **Pago digital** y el backend mantiene a TAYPI como proveedor de confirmación.
+
+No se genera un QR dinámico de Yape únicamente a partir de un número telefónico. Un QR estático asociado a teléfono no entrega una confirmación financiera verificable y no debe marcar `PAID` automáticamente. Para cobro real con confirmación automática se debe usar el QR dinámico devuelto por TAYPI; el teléfono o la cuenta receptora se configura en el comercio/proveedor autorizado. Si se necesita cambiar el número receptor, hágalo en la cuenta KYB del proveedor y vuelva a verificar un pago completo antes de operar.
+
 ## Supabase
 
 1. Cree un proyecto y habilite Email/Password o el proveedor de Auth seleccionado.
