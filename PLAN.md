@@ -45,6 +45,7 @@ Construir una caja web para Grupo La Católica que genere cobros digitales por o
 - [x] Rechazar reutilización conflictiva de `provider_event_id`, limitar campos de webhook y validar frescura HMAC de TAYPI.
 - [x] Persistir primero la intención digital y recuperar de forma idempotente un checkout cuyo ID no se alcanzó a adjuntar.
 - [x] Mantener recuperables las intenciones provisionales aun después del vencimiento local y acotar el escaneo de expirados.
+- [x] Limitar creación, reconciliación manual y webhooks verificados con buckets distribuidos en PostgreSQL.
 
 ### Fase 3 — Operación y reportes
 
@@ -55,7 +56,7 @@ Construir una caja web para Grupo La Católica que genere cobros digitales por o
 - [x] PWA instalable con manifest, icono institucional y service worker limitado al shell estático.
 - [x] Gestión de usuarios y montos rápidos configurables desde administración.
 - [ ] Mejoras UX y accesibilidad adicionales.
-- [ ] Configurar rate limiting distribuido en Vercel WAF o gateway de producción.
+- [ ] Configurar rate limiting por IP en Vercel WAF o gateway de producción (el backend ya limita por usuario/proveedor).
 
 ### Fase 4 — Proveedores adicionales
 

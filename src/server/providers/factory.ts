@@ -40,6 +40,21 @@ function assertLiveTaypiConfiguration(env: Record<string, string | undefined>): 
     || /^taypi_(?:pk|sk)_test_/i.test(env.TAYPI_SECRET_KEY?.trim() ?? '')) {
     throw new ProviderError('TAYPI test keys are not allowed in production', 500, 'PROVIDER_NOT_CONFIGURED');
   }
+  if (!/^taypi_pk_live_[A-Za-z0-9_-]+$/.test(env.TAYPI_PUBLIC_KEY?.trim() ?? '')
+    || !/^taypi_sk_live_[A-Za-z0-9_-]+$/.test(env.TAYPI_SECRET_KEY?.trim() ?? '')) {
+    throw new ProviderError('TAYPI live keys are required in production', 500, 'PROVIDER_NOT_CONFIGURED');
+  }
+  const configuredUrl = env.TAYPI_API_URL?.trim();
+  if (configuredUrl) {
+    try {
+      const parsed = new URL(configuredUrl);
+      if (parsed.protocol !== 'https:' || parsed.hostname !== 'app.taypi.pe') {
+        throw new Error('host');
+      }
+    } catch {
+      throw new ProviderError('TAYPI_API_URL must be https://app.taypi.pe in production', 500, 'PROVIDER_NOT_CONFIGURED');
+    }
+  }
 }
 
 function isProduction(env: Record<string, string | undefined>): boolean {

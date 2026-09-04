@@ -84,13 +84,25 @@ describe('report export', () => {
     expect(csv).not.toContain('token-secret')
   })
 
+  it('neutralizes spreadsheet formulas in exported text', () => {
+    const payment: ClientPayment = {
+      id: 'p-formula', reference: '=1+1', amountCents: 1000, currency: 'PEN',
+      provider: 'taypi', status: 'PAID', method: 'DIGITAL', createdBy: '@attacker',
+      createdAt: '2026-09-02T12:00:00.000Z',
+    }
+    const csv = paymentsToCsv([payment])
+    expect(csv).toContain("'=1+1")
+    expect(csv).toContain("'@attacker")
+  })
+
   it('uses Monday-to-Sunday local calendar weeks', () => {
     const range = periodRange('WEEK', new Date('2026-09-02T12:00:00.000Z'))
     const from = new Date(range.from!)
     const to = new Date(range.to!)
-    expect(from.getDay()).toBe(1)
-    expect(from.getHours()).toBe(0)
-    expect(to.getDay()).toBe(0)
-    expect(to.getHours()).toBe(23)
+    expect(from.getUTCDay()).toBe(1)
+    expect(from.getUTCHours()).toBe(5)
+    // Sunday 23:59:59.999 in Lima is Monday 04:59:59.999 UTC.
+    expect(to.getUTCDay()).toBe(1)
+    expect(to.getUTCHours()).toBe(4)
   })
 })

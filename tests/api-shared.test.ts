@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseBody, parseRequestAmount, parseIdempotencyKey, publicPayment, fallbackWebhookEventId, recordWebhookReceipt } from '../api/_shared';
+import { parseBody, parseRequestAmount, parseIdempotencyKey, publicPayment, fallbackWebhookEventId, recordWebhookReceipt, consumeRateLimit } from '../api/_shared';
 import { parseFilters, restrictFiltersForRole } from '../api/payments';
 
 describe('server API input and response boundaries', () => {
@@ -65,5 +65,14 @@ describe('server API input and response boundaries', () => {
   it('validates bounded ledger pagination', () => {
     expect(parseFilters({ limit: '200', offset: '400' }, 'ADMIN')).toMatchObject({ limit: 200, offset: 400 });
     expect(() => parseFilters({ offset: '50001' }, 'ADMIN')).toThrow('offset must be between');
+  });
+
+  it('fails closed when the distributed rate-limit RPC rejects or is exhausted', async () => {
+    const client = (result: { data: unknown; error: unknown }) => ({
+      rpc: async () => result,
+    }) as never;
+    await expect(consumeRateLimit(client({ data: true, error: null }), 'payment:create:user:u1', 30)).resolves.toBeUndefined();
+    await expect(consumeRateLimit(client({ data: false, error: null }), 'payment:create:user:u1', 30)).rejects.toMatchObject({ statusCode: 429 });
+    await expect(consumeRateLimit(client({ data: null, error: new Error('missing function') }), 'payment:create:user:u1', 30)).rejects.toMatchObject({ statusCode: 503 });
   });
 });

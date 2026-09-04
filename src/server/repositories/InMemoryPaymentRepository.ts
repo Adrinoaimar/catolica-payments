@@ -132,7 +132,12 @@ export class InMemoryPaymentRepository implements PaymentRepository {
       if (!payment) throw new Error('Payment not found');
       const duplicate = this.eventIds.get(eventKey(input.provider, input.providerEventId));
       if (duplicate) return { payment: structuredClone(payment), event: structuredClone(duplicate), changed: false };
-      if (payment.status !== 'PENDING') return { payment: structuredClone(payment), event: null, changed: false };
+      // Preserve a real provider capture that arrives after the local QR
+      // deadline. The audit event records EXPIRED -> PAID instead of dropping
+      // money outside the ledger.
+      if (payment.status !== 'PENDING' && !(payment.status === 'EXPIRED' && input.newStatus === 'PAID')) {
+        return { payment: structuredClone(payment), event: null, changed: false };
+      }
       const event: PaymentEvent = {
         id: randomUUID(), paymentId: payment.id, eventType: input.eventType,
         previousStatus: payment.status, newStatus: input.newStatus, provider: input.provider,

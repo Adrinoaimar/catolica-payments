@@ -1,5 +1,6 @@
 import {
   cashPaymentContext,
+  consumeRateLimit,
   parseBody,
   parseRequestAmount,
   parseIdempotencyKey,
@@ -18,6 +19,7 @@ export default async function handler(request: ApiRequest, response: ApiResponse
   try {
     const client = serverClient();
     const user = await requireUser(request, client);
+    await consumeRateLimit(client, `payment:create:user:${user.id}`, 30, 60);
     const body = parseBody(request.body);
     const amountCents = parseRequestAmount(body);
     const payment = await cashPaymentContext(client).createCashPayment({ amountCents, createdBy: user.id, idempotencyKey: parseIdempotencyKey(request) });

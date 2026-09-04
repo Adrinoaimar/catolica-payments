@@ -182,7 +182,7 @@ describe('payment domain', () => {
     expect(repository.payments.size).toBe(0);
   });
 
-  it('does not pay an already expired payment', async () => {
+  it('records a provider capture that races local expiry', async () => {
     const { service, provider, repository } = setup();
     const created = await service.createDigitalPayment({ amountCents: 1000 });
     await service.expirePayments(new Date('2026-09-02T12:16:00.000Z'));
@@ -190,8 +190,9 @@ describe('payment domain', () => {
     const raw = provider.simulateSuccessfulPayment(created.payment.providerPaymentId!);
     const webhook = await provider.verifyWebhook({ rawBody: raw, headers: {} });
     const result = await service.processWebhook(webhook);
-    expect(result.changed).toBe(false);
-    expect(result.payment.status).toBe('EXPIRED');
+    expect(result.changed).toBe(true);
+    expect(result.payment.status).toBe('PAID');
+    expect(Array.from(repository.events.values()).at(-1)?.previousStatus).toBe('EXPIRED');
   });
 
   it('records cash as PAID with CASH provider', async () => {

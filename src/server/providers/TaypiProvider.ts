@@ -113,6 +113,7 @@ export class TaypiProvider implements PaymentProvider {
     const amountCents = parseTaypiAmount(payload.amount);
     const rawStatus = stringValue(payload.status).toLowerCase();
     const status = mapWebhookStatus(rawStatus, eventType);
+    const paidAt = stringValue(payload.paid_at);
 
     if (!paymentId || !reference || !currency || amountCents === null || !status) {
       throw new ProviderError('Invalid taypi webhook payload', 400, 'INVALID_WEBHOOK');
@@ -139,6 +140,7 @@ export class TaypiProvider implements PaymentProvider {
       amountCents,
       currency,
       status,
+      ...(paidAt ? { paidAt: parseProviderTimestamp(paidAt) } : {}),
       payload,
     };
   }
@@ -301,10 +303,23 @@ function stringValue(value: unknown): string {
 }
 
 function mapWebhookStatus(status: string, eventType: string): VerifiedWebhook['status'] | null {
-  const candidate = status || eventType.replace(/^payment\./, '').toLowerCase();
+  const normalizedEvent = eventType.trim().toLowerCase();
+  const eventCandidate = normalizedEvent ? normalizedEvent.replace(/^payment\./, '') : '';
+  const statusCandidate = status.trim().toLowerCase();
+  const byEvent = eventCandidate ? mapTerminalWord(eventCandidate) : null;
+  const byStatus = statusCandidate ? mapTerminalWord(statusCandidate) : null;
+  // A signed event name and status must describe the same terminal state.
+  // Unknown event names are rejected instead of allowing status to override.
+  if (normalizedEvent && !byEvent) return null;
+  if (byEvent && byStatus && byEvent !== byStatus) return null;
+  return byEvent ?? byStatus;
+}
+
+function mapTerminalWord(candidate: string): VerifiedWebhook['status'] | null {
   switch (candidate) {
     case 'completed':
     case 'paid':
+    case 'succeeded':
       return 'PAID';
     case 'expired':
       return 'EXPIRED';
@@ -317,6 +332,15 @@ function mapWebhookStatus(status: string, eventType: string): VerifiedWebhook['s
     default:
       return null;
   }
+}
+
+function parseProviderTimestamp(value: unknown): string {
+  const text = stringValue(value);
+  const date = new Date(text);
+  if (!text || !Number.isFinite(date.getTime())) {
+    throw new ProviderError('Invalid TAYPI paid_at', 400, 'INVALID_WEBHOOK');
+  }
+  return date.toISOString();
 }
 
 function normalizeQrImage(value: unknown): string | undefined {

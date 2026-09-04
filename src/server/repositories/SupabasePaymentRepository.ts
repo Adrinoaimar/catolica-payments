@@ -92,6 +92,7 @@ export class SupabasePaymentRepository implements PaymentRepository {
       p_event_type: input.eventType,
       p_new_status: input.newStatus,
       p_raw_payload: input.payload,
+      p_paid_at: input.paidAt,
     });
     if (error) throw error;
     const result = data as { changed: boolean; payment: Row; event?: Row };

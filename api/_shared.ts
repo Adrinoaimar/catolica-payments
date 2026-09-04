@@ -73,9 +73,36 @@ export function paymentContext(client = serverClient()): { service: PaymentServi
   return { provider, service: new PaymentService({ provider, repository: paymentRepository(client) }) };
 }
 
+/** Consume a durable PostgreSQL bucket; in-memory counters are not safe on
+ * ephemeral serverless instances. */
+export async function consumeRateLimit(
+  client: SupabaseClient,
+  bucketKey: string,
+  limit: number,
+  windowSeconds = 60,
+): Promise<void> {
+  const { data, error } = await client.rpc('consume_api_rate_limit', {
+    p_bucket_key: bucketKey,
+    p_limit: limit,
+    p_window_seconds: windowSeconds,
+  });
+  if (error) throw new HttpError(503, 'Rate limit is not configured');
+  if (data !== true) throw new HttpError(429, 'Too many requests; try again later');
+}
+
 /** Cash ledger writes do not depend on a digital provider being configured. */
 export function cashPaymentContext(client = serverClient()): PaymentService {
   return new PaymentService({ repository: paymentRepository(client) });
+}
+
+/** Match the API's tenant boundary for single-reference reads and actions. */
+export function assertPaymentVisibleToUser(payment: Payment, user: { role: 'ADMIN' | 'CASHIER' }): void {
+  if (user.role === 'ADMIN') return;
+  const createdAt = Date.parse(payment.createdAt);
+  const { from, to } = limaTodayRange();
+  if (!Number.isFinite(createdAt) || createdAt < Date.parse(from) || createdAt > Date.parse(to)) {
+    throw new HttpError(404, 'Payment not found');
+  }
 }
 
 export class HttpError extends Error {
@@ -180,7 +207,11 @@ export function publicProviderPayment(payment: ProviderPayment): Record<string, 
 }
 
 export function sendError(response: ApiResponse, error: unknown): void {
-  if (error instanceof HttpError) { response.status(error.statusCode).json({ error: error.message }); return; }
+  if (error instanceof HttpError) {
+    if (error.statusCode === 429) response.setHeader?.('Retry-After', '60');
+    response.status(error.statusCode).json({ error: error.message });
+    return;
+  }
   if (error instanceof ProviderError) { response.status(error.statusCode).json({ error: error.message, code: error.code }); return; }
   const code = typeof error === 'object' && error !== null && 'code' in error ? String((error as { code?: unknown }).code) : '';
   if (code === 'P0002') { response.status(404).json({ error: 'Payment not found' }); return; }
@@ -263,4 +294,13 @@ function normalizeQrCode(value: string): string {
   if (/^<svg[\s>]/i.test(value)) return `data:image/svg+xml,${encodeURIComponent(value)}`;
   if (/^[A-Za-z0-9+/]+={0,2}$/.test(value)) return `data:image/svg+xml;base64,${value}`;
   return value;
+}
+
+function limaTodayRange(now = new Date()): { from: string; to: string } {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Lima', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(now);
+  const values = Object.fromEntries(parts.filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]));
+  const start = new Date(Date.UTC(Number(values.year), Number(values.month) - 1, Number(values.day), 5, 0, 0, 0));
+  return { from: start.toISOString(), to: new Date(start.getTime() + 24 * 60 * 60_000 - 1).toISOString() };
 }

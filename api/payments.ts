@@ -1,5 +1,6 @@
 import {
   cashPaymentContext,
+  consumeRateLimit,
   parseBody,
   parseRequestAmount,
   paymentContext,
@@ -25,10 +26,10 @@ export default async function handler(request: ApiRequest, response: ApiResponse
     const client = serverClient();
     const user = await requireUser(request, client);
     if (request.method === 'GET') {
-      const { service } = paymentContext(client);
       const repository = paymentRepository(client);
-      // Expiration is enforced server-side even when no scheduled job has run.
-      await service.expirePayments();
+      // Expiry/reconciliation runs on the scheduler. Listing must not fan out
+      // to TAYPI once per dashboard request.
+      await consumeRateLimit(client, `payment:list:user:${user.id}`, 120, 60);
       const filters = restrictFiltersForRole(parseFilters(request.query, user.role), user.role);
       const payments = await repository.list(filters);
       response.status(200).json({
@@ -40,6 +41,7 @@ export default async function handler(request: ApiRequest, response: ApiResponse
       return;
     }
 
+    await consumeRateLimit(client, `payment:create:user:${user.id}`, 30, 60);
     const body = parseBody(request.body);
     const amountCents = parseRequestAmount(body);
     const idempotencyKey = parseIdempotencyKey(request);

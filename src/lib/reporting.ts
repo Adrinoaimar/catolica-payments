@@ -15,28 +15,28 @@ export interface PaymentReportFilters {
   limit?: number
 }
 
-/** Return local calendar range, then callers serialize it for the API. */
+/** Return the institution's America/Lima calendar range. */
 export function periodRange(period: ReportPeriod, now = new Date()): { from?: string; to?: string } {
   if (period === 'ALL') return {}
-  const start = new Date(now)
-  const end = new Date(now)
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Lima', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(now)
+  const values = Object.fromEntries(parts.filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]))
+  // Represent a Lima midnight as 05:00 UTC so range calculations do not use
+  // the cashier device's timezone.
+  const start = new Date(Date.UTC(Number(values.year), Number(values.month) - 1, Number(values.day), 5, 0, 0, 0))
+  const end = new Date(start)
   if (period === 'DAY') {
-    start.setHours(0, 0, 0, 0)
-    end.setHours(23, 59, 59, 999)
+    end.setTime(start.getTime() + 24 * 60 * 60_000 - 1)
   } else if (period === 'WEEK') {
-    start.setHours(0, 0, 0, 0)
-    // Monday is first day in Peru and most institutional reports.
-    const day = start.getDay()
+    const day = start.getUTCDay()
     const mondayOffset = day === 0 ? -6 : 1 - day
-    start.setDate(start.getDate() + mondayOffset)
-    end.setTime(start.getTime())
-    end.setDate(start.getDate() + 6)
-    end.setHours(23, 59, 59, 999)
+    start.setUTCDate(start.getUTCDate() + mondayOffset)
+    end.setTime(start.getTime() + 7 * 24 * 60 * 60_000 - 1)
   } else if (period === 'MONTH') {
-    start.setDate(1)
-    start.setHours(0, 0, 0, 0)
-    end.setMonth(start.getMonth() + 1, 0)
-    end.setHours(23, 59, 59, 999)
+    start.setUTCDate(1)
+    end.setUTCMonth(start.getUTCMonth() + 1, 1)
+    end.setTime(end.getTime() - 1)
   } else {
     return {}
   }
@@ -127,7 +127,12 @@ const csvColumns: Array<{ key: string; label: string; value: (payment: Payment) 
 
 /** CSV contains only public report fields: no provider IDs, tokens, QR, or raw metadata. */
 export function paymentsToCsv(payments: Payment[]): string {
-  const escape = (value: string) => `"${value.replace(/"/g, '""')}"`
+  // Prefix formula-leading values so spreadsheet programs treat user data as
+  // text rather than executing it when the CSV is opened.
+  const escape = (value: string) => {
+    const safe = /^[=+\-@]/.test(value) ? `'${value}` : value
+    return `"${safe.replace(/"/g, '""')}"`
+  }
   return `\ufeff${csvColumns.map((column) => escape(column.label)).join(',')}\r\n${payments.map((payment) => csvColumns.map((column) => escape(column.value(payment))).join(',')).join('\r\n')}${payments.length ? '\r\n' : ''}`
 }
 

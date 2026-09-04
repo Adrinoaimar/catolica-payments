@@ -72,6 +72,8 @@ export interface VerifiedWebhook {
   amountCents: number;
   currency: string;
   status: 'PAID' | 'FAILED' | 'EXPIRED' | 'CANCELLED';
+  /** Provider-confirmed capture time, when present in the signed payload. */
+  paidAt?: string;
   payload: unknown;
 }
 

@@ -35,6 +35,11 @@ if (/^taypi_(?:pk|sk)_test_/i.test(String(env.TAYPI_PUBLIC_KEY ?? '').trim())
   errors.push('TAYPI test keys must not be used in production')
 }
 
+if (!/^taypi_pk_live_[A-Za-z0-9_-]+$/.test(String(env.TAYPI_PUBLIC_KEY ?? '').trim())
+  || !/^taypi_sk_live_[A-Za-z0-9_-]+$/.test(String(env.TAYPI_SECRET_KEY ?? '').trim())) {
+  errors.push('TAYPI live keys are required in production')
+}
+
 if (String(env.CRON_SECRET ?? '').trim().length < 32) {
   errors.push('CRON_SECRET must contain at least 32 characters')
 }
@@ -50,6 +55,15 @@ for (const name of ['VITE_SUPABASE_URL', 'SUPABASE_URL', 'TAYPI_API_URL']) {
   } catch {
     errors.push(`${name} must be a valid URL`)
   }
+}
+
+if (String(env.TAYPI_API_URL ?? '').trim()) {
+  try {
+    const url = new URL(String(env.TAYPI_API_URL).trim())
+    if (url.protocol !== 'https:' || url.hostname !== 'app.taypi.pe') {
+      errors.push('TAYPI_API_URL must be https://app.taypi.pe in production')
+    }
+  } catch { /* URL validation above reports malformed values. */ }
 }
 
 for (const name of Object.keys(env)) {

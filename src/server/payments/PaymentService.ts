@@ -226,6 +226,7 @@ export class PaymentService {
     assertWebhookField(webhook.reference, 'reference');
     assertWebhookField(webhook.eventType, 'event type');
     if (!isTerminalStatus(webhook.status)) throw new Error('Invalid webhook status');
+    assertWebhookStatusMatchesEvent(webhook.eventType, webhook.status);
     if (webhook.currency !== 'PEN') throw new Error('Unsupported webhook currency');
     this.validateAmount(webhook.amountCents);
     const payment = await this.options.repository.findByProviderPaymentId(webhook.providerPaymentId);
@@ -241,7 +242,8 @@ export class PaymentService {
     const result = await this.options.repository.markPaidFromWebhook({
       paymentId: payment.id, provider: provider.name, amountCents: webhook.amountCents, currency: webhook.currency,
       providerEventId: webhook.eventId, newStatus: webhook.status,
-      payload: webhook.payload, eventType: webhook.eventType, paidAt: this.now().toISOString(),
+      payload: webhook.payload, eventType: webhook.eventType,
+      paidAt: normalizeWebhookPaidAt(webhook.paidAt, this.now()),
     });
     // A legacy/alternate repository may return an existing event from a
     // conflicting payment when its DB unique constraint wins a race. Never
@@ -299,6 +301,7 @@ export class PaymentService {
           amountCents: state.amountCents,
           currency: state.currency,
           status: state.status,
+          ...(state.paidAt ? { paidAt: state.paidAt } : {}),
           payload: {
             source: 'server_reconciliation',
             event_id: eventId,
@@ -331,12 +334,13 @@ export class PaymentService {
   async reconcilePaymentByReference(reference: string): Promise<{ payment: Payment; changed: boolean }> {
     const provider = this.digitalProvider();
     // Apply the same local-expiry rule as the scheduled pass before asking the
-    // provider. A late result must never reopen a ledger row already expired.
+    // provider. A confirmed late capture is retained as EXPIRED -> PAID.
     const payment = await this.findPaymentByReference(reference);
     if (!payment) throw new Error('Payment not found');
-    if (payment.status !== 'PENDING' || payment.provider !== provider.name) {
+    if (!['PENDING', 'EXPIRED'].includes(payment.status) || payment.provider !== provider.name) {
       return { payment, changed: false };
     }
+    if (payment.status === 'EXPIRED' && !payment.providerPaymentId) return { payment, changed: false };
     const current = payment.providerPaymentId ? payment : (await this.recoverProviderPayment(payment, provider)).payment;
     if (!current.providerPaymentId) return { payment: current, changed: false };
     const state = await provider.getPayment(current.providerPaymentId);
@@ -356,6 +360,7 @@ export class PaymentService {
       amountCents: state.amountCents,
       currency: state.currency,
       status: state.status,
+      ...(state.paidAt ? { paidAt: state.paidAt } : {}),
       payload: {
         source: 'server_reconciliation', event_id: eventId,
         provider_payment_id: state.providerPaymentId, reference: state.reference,
@@ -460,11 +465,6 @@ export class PaymentService {
         if (isTerminalStatus(state.status)) {
           // A provider PAID response is authoritative unless it explicitly
           // proves capture happened after the local deadline.
-          if (state.status === 'PAID' && state.paidAt && payment.expiresAt
-            && new Date(state.paidAt).getTime() > new Date(payment.expiresAt).getTime()) {
-            const item = await this.options.repository.markExpired(payment.id, now.toISOString());
-            return item.payment;
-          }
           const eventId = normalizeReconciliationEventId(state.eventId, provider.name, state.providerPaymentId);
           const transitioned = await this.processWebhook({
             eventId,
@@ -474,6 +474,7 @@ export class PaymentService {
             amountCents: state.amountCents,
             currency: state.currency ?? payment.currency,
             status: state.status,
+            ...(state.paidAt ? { paidAt: state.paidAt } : {}),
             payload: { source: 'server_expiry_check', provider_payment_id: state.providerPaymentId, reference: state.reference, status: state.status },
           });
           return transitioned.payment;
@@ -548,6 +549,40 @@ function normalizeReconciliationEventId(eventId: string | undefined, provider: s
 
 function assertWebhookField(value: string, label: string): void {
   if (!isSafeWebhookField(value)) throw new ProviderError(`Invalid webhook ${label}`, 400, 'INVALID_WEBHOOK');
+}
+
+function assertWebhookStatusMatchesEvent(eventType: string, status: VerifiedWebhook['status']): void {
+  const event = eventType.trim().toLowerCase();
+  const expected = eventStatus(event);
+  if (expected && expected !== status) {
+    throw new ProviderError('Webhook event and status do not match', 400, 'INVALID_WEBHOOK');
+  }
+}
+
+function eventStatus(eventType: string): VerifiedWebhook['status'] | null {
+  switch (eventType) {
+    case 'payment.completed':
+    case 'payment.paid':
+    case 'payment.succeeded':
+      return 'PAID';
+    case 'payment.expired':
+      return 'EXPIRED';
+    case 'payment.cancelled':
+    case 'payment.canceled':
+      return 'CANCELLED';
+    case 'payment.failed':
+    case 'payment.rejected':
+      return 'FAILED';
+    default:
+      return null;
+  }
+}
+
+function normalizeWebhookPaidAt(value: string | undefined, fallback: Date): string {
+  if (!value) return fallback.toISOString();
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) throw new ProviderError('Invalid provider paid_at', 400, 'INVALID_WEBHOOK');
+  return parsed.toISOString();
 }
 
 function isSafeWebhookField(value: string, maxLength = 200): boolean {

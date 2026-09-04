@@ -125,7 +125,21 @@ describe('TaypiProvider', () => {
       amountCents: 3_050,
       currency: 'PEN',
       status: 'PAID',
+      paidAt: '2026-09-03T01:00:00.000Z',
     });
+  });
+
+  it('rejects an event/status combination that disagrees', async () => {
+    const rawBody = JSON.stringify({
+      event: 'payment.expired', payment_id: 'pay_fixture_1', amount: '30.50',
+      currency: 'PEN', status: 'completed', reference: 'CAT-TEST-001',
+    });
+    const signature = createHmac('sha256', webhookSecret).update(rawBody).digest('hex');
+    const provider = new TaypiProvider({ publicKey, secretKey, webhookSecret, now: () => 1_788_350_400 });
+    await expect(provider.verifyWebhook({
+      rawBody,
+      headers: { 'Taypi-Signature': signature, 'Taypi-Timestamp': '1788350400' },
+    })).rejects.toMatchObject({ code: 'INVALID_WEBHOOK', statusCode: 400 });
   });
 
   it('rejects an unsigned webhook', async () => {

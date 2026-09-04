@@ -1,7 +1,10 @@
 import { PaymentService } from '../../../src/server';
 import {
   parseReference,
+  assertPaymentVisibleToUser,
+  consumeRateLimit,
   paymentContext,
+  paymentRepository,
   publicPayment,
   requireUser,
   sendError,
@@ -19,8 +22,11 @@ export default async function handler(request: ApiRequest, response: ApiResponse
   if (request.method !== 'POST') { response.status(405).json({ error: 'Method not allowed' }); return; }
   try {
     const client = serverClient();
-    await requireUser(request, client);
+    const user = await requireUser(request, client);
+    await consumeRateLimit(client, `payment:reconcile:user:${user.id}`, 12, 60);
     const reference = parseReference(request.query?.reference instanceof Array ? request.query.reference[0] : request.query?.reference);
+    const candidate = await paymentRepository(client).findByReference(reference);
+    if (candidate) assertPaymentVisibleToUser(candidate, user);
     const { service } = paymentContext(client);
     const result = await service.reconcilePaymentByReference(reference);
     response.status(200).json({ payment: publicPayment(result.payment), changed: result.changed });

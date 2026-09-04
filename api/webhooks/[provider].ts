@@ -4,6 +4,7 @@ import { MockPaymentProvider } from '../../src/server/providers/MockPaymentProvi
 import { ProviderError } from '../../src/server/providers/PaymentProvider';
 import {
   HttpError,
+  consumeRateLimit,
   paymentContext,
   readRawBody,
   publicPayment,
@@ -30,6 +31,7 @@ export default async function handler(request: ApiRequest & Partial<AsyncIterabl
     client = context.client;
     receiptEventId = fallbackWebhookEventId(request, rawBody);
     const verified = await context.provider.verifyWebhook({ rawBody, headers: request.headers });
+    await consumeRateLimit(client, `webhook:${providerName}`, 120, 60);
     receiptEventId = verified.eventId;
     const result = await context.service.processWebhook(verified);
     await recordWebhookReceipt(client, {
