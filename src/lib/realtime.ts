@@ -31,6 +31,7 @@ export function subscribeToPayments({ userId, onChange, onStatus, intervalMs = 5
   let disposed = false
   let polling = false
   let initialized = false
+  let healthy = false
   let previous = new Map<string, Payment>()
 
   const poll = async () => {
@@ -55,8 +56,10 @@ export function subscribeToPayments({ userId, onChange, onStatus, intervalMs = 5
       }
       previous = current
       initialized = true
-      onStatus?.('SUBSCRIBED')
+      if (!healthy) onStatus?.('SUBSCRIBED')
+      healthy = true
     } catch (reason) {
+      healthy = false
       if (!disposed) onStatus?.('CHANNEL_ERROR', toError(reason, 'No se pudo sincronizar el ledger.'))
     } finally {
       polling = false
